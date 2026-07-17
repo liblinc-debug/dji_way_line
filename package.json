@@ -1,0 +1,47 @@
+{
+  "name": "way_line",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "GPL-3.0",
+  "scripts": {
+    "dev": "vite --host",
+    "api": "node backend/server.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "audit:polygon": "node scripts/polygon_feature_audit.mjs"
+  },
+  "dependencies": {
+    "@amap/amap-jsapi-loader": "^1.0.1",
+    "@turf/circle": "^7.3.0",
+    "@turf/turf": "^7.3.3",
+    "@vue/shared": "^3.5.24",
+    "@zouyaoji/heatmap.js": "^2.0.8",
+    "ant-design-vue": "^4.2.6",
+    "cesium": "^1.135.0",
+    "compare-versions": "^6.1.1",
+    "echarts": "^6.0.0",
+    "jszip": "^3.10.1",
+    "kdbush": "^4.0.2",
+    "lodash": "^4.17.21",
+    "lodash-es": "^4.17.21",
+    "lodash-unified": "^1.0.3",
+    "mitt": "^3.0.1",
+    "proj4": "^2.20.2",
+    "urijs": "^1.19.11",
+    "vue": "^3.5.24",
+    "vue-cesium": "^3.2.11"
+  },
+  "devDependencies": {
+    "@unocss/preset-attributify": "^66.5.9",
+    "@unocss/preset-uno": "^66.5.9",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "unocss": "^66.5.9",
+    "vite": "^5.4.11",
+    "vite-plugin-cesium": "^1.2.23"
+  },
+  "packageManager": "pnpm@10.8.1+sha512.c50088ba998c67b8ca8c99df8a5e02fd2ae2e2b29aaf238feaa9e124248d3f48f9fb6db2424949ff901cffbb5e0f0cc1ad6aedb602cd29450751d11c35023677",
+  "volta": {
+    "node": "22.21.1"
+  }
+}

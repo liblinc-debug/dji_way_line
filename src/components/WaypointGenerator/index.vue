@@ -1,0 +1,811 @@
+<template>
+  <div class="w-screen h-screen overflow-hidden font-sans relative">
+    <!-- 统一地图背景层：真正实现单例持久化，消除闪烁 -->
+    <div class="absolute inset-0 z-[1] bg-gray-100" :class="mapLayoutClass">
+      <MapViewer ref="mapRef" :waypoints="activeMapData.waypoints" :route-type="activeMapData.routeType"
+        :execute-height-mode="activeMapData.executeHeightMode"
+        :is-patrol-mode="false"
+        :scan-path="activeMapData.scanPath" :coverage-area="activeMapData.coverageArea"
+        :cutting-segments="activeMapData.cuttingSegments" :is-closed-loop="activeMapData.isClosedLoop"
+        :selected-wp-index="activeMapData.selectedWpIndex" :takeoff-point="activeMapData.takeoffPoint"
+        :active-region-id="activeMapData.activeRegionId"
+        :strip-route-mode="activeMapData.stripRouteMode"
+        :geometry-config="activeMapData.geometryConfig"
+        :slope-config="activeMapData.slopeConfig"
+        :left-overlay-offset="activeMapData.leftOverlayOffset"
+        @update:takeoffHeight="handleTakeoffHeightUpdate" @map-click="onMapClick" @insert-waypoint="onInsertWaypoint"
+        class="h-full w-full" />
+    </div>
+
+    <div class="relative z-[10] w-full h-full pointer-events-none">
+      <!-- 视图 1: 任务库 (Mission Library) -->
+      <div v-if="currentView === 'library'" class="flex h-full w-full">
+        <div class="h-full w-[330px] shrink-0 border-r border-gray-200 bg-white shadow-lg pointer-events-auto">
+          <MissionLibrary :missions="missions" :selected-id="previewMission?.id" @create="showCreateModal = true"
+            @select="handlePreviewMission" @edit="selectMission" @delete="deleteMission" @download="downloadKMZ"
+            class="h-full" />
+        </div>
+        <!-- 右侧区域透明，显示地图 -->
+        <div class="flex-1 h-full"></div>
+      </div>
+
+      <!-- 视图 2: 编辑器路由 (Mission Editor Router) -->
+      <div v-else class="h-full w-full">
+        <!-- 路由到独立的航点编辑器 (3栏布局) -->
+        <WaypointEditor v-if="editingMission" ref="editorRef"
+          class="pointer-events-none" :key="'wp-editor-' + editingMission.id" :initial-mission="editingMission"
+          :get-map-pose="getMapPose"
+          @back="handleBackToLibrary" @save="updateAndSaveMission" @update:mission-data="handleMissionUpdate"
+          @record-pose="handleRecordPoseFromEditor" @fov-update="handleFovUpdateFromEditor"
+          @virtual-flight-update="handleVirtualFlightUpdateFromEditor"
+          @generate-result="handleWaylineGenerated" @generate-error="handleWaylineGenerateError" />
+
+        <!-- 路由到通用的业务编辑器 (2栏布局: 测绘/带状/巡逻) -->
+      </div>
+    </div>
+
+    <!-- 创建航线模态框 -->
+    <CreateMissionModal :visible="showCreateModal" :initial-values="embeddedContext" @cancel="showCreateModal = false"
+      @confirm="onMissionCreated" />
+
+    <!-- 2D/3D 切换按钮 (避开右侧编辑器面板，使用 calc 动态计算位置) -->
+    <div class="fixed bottom-32 z-[10000] pointer-events-auto transition-all duration-300"
+      :style="{ right: currentView === 'editor' && editingMission ? '370px' : '20px' }">
+      <button v-if="mapRef" @click="mapRef.toggleSceneMode()"
+        class="w-10 h-10 rounded-full border border-white/30 bg-black/60 backdrop-blur-xl flex flex-col items-center justify-center cursor-pointer hover:bg-black/80 hover:border-blue-400/50 transition-all group active:scale-90 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+        <span
+          class="text-[9px] font-bold text-gray-400 group-hover:text-blue-300 transition-colors leading-none uppercase">Scene</span>
+        <span class="text-[12px] font-black text-white group-hover:text-blue-400 transition-colors">
+          {{ mapRef.sceneMode === 2 ? '2D' : '3D' }}
+        </span>
+      </button>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { generateKMZ } from '../../utils/kmzGenerator';
+import { buildLocalWaylineResult, downloadWaylineBlob } from '../../utils/localWaylineFile';
+import {
+  getAircraftModelMeta,
+  getV2CompatibleWaypointExportMeta
+} from '../../constants/aircraftModels.js';
+import CreateMissionModal from './CreateMissionModal.vue';
+import WaypointEditor from './editors/WaypointEditor.vue';
+import MapViewer from './MapViewer.vue';
+import MissionLibrary from './MissionLibrary.vue';
+
+const MISSIONS_STORAGE_KEY = 'missions';
+const UI_STATE_STORAGE_KEY = 'waypoint-generator-ui-state';
+
+const missions = ref([]);
+const currentView = ref('library');
+const showCreateModal = ref(false);
+const editingMission = ref(null);
+const previewMission = ref(null);
+const mapRef = ref(null);
+const editorRef = ref(null);
+const getMapPose = () => mapRef.value?.getCurrentPose?.() || null;
+const embeddedContext = ref({});
+const BRIDGE_MESSAGE_SOURCE = 'wrj-wayline-bridge';
+
+const isEmbedded = () => window.parent && window.parent !== window;
+
+const postParentMessage = (type, payload = {}) => {
+  if (!isEmbedded()) return;
+  window.parent.postMessage({ type, payload }, '*');
+};
+
+const postBridgeMessage = (action, payload = {}) => {
+  if (!isEmbedded()) return;
+  window.parent.postMessage({
+    source: BRIDGE_MESSAGE_SOURCE,
+    action,
+    payload
+  }, '*');
+};
+
+const getQueryContext = () => {
+  const params = new URLSearchParams(window.location.search || '');
+  return {
+    mode: params.get('mode') || '',
+    missionId: params.get('missionId') || '',
+    missionName: params.get('lineName') || params.get('missionName') || '',
+    aircraftModel: params.get('deviceModel') || params.get('aircraftModel') || '',
+    routeType: params.get('routeType') || ''
+  };
+};
+
+const applyEmbeddedContext = (payload = {}) => {
+  const mode = payload.mode || embeddedContext.value.mode || '';
+  const isCreateMode = mode === 'legacy-create';
+  if (isEmbedded() && isCreateMode) {
+    currentView.value = 'library';
+    editingMission.value = null;
+    previewMission.value = null;
+    showCreateModal.value = false;
+  }
+
+  embeddedContext.value = {
+    ...embeddedContext.value,
+    mode: payload.mode || embeddedContext.value.mode,
+    callbackId: payload.callbackId,
+    missionId: payload.missionId || embeddedContext.value.missionId,
+    missionName: payload.missionName || embeddedContext.value.missionName,
+    aircraftModel: payload.aircraftModel || embeddedContext.value.aircraftModel,
+    routeType: payload.routeType || embeddedContext.value.routeType
+  };
+
+  const patch = Object.fromEntries(
+    Object.entries({
+      aircraftModel: payload.aircraftModel,
+      missionName: payload.missionName,
+      routeType: payload.routeType
+    }).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  );
+
+  if (editingMission.value && Object.keys(patch).length > 0) {
+    const nextConfig = normalizeMissionConfig({
+      ...editingMission.value.config,
+      ...patch
+    });
+    editingMission.value = {
+      ...editingMission.value,
+      id: payload.missionId || editingMission.value.id,
+      name: payload.missionName || editingMission.value.name,
+      config: nextConfig,
+      updatedAt: Date.now()
+    };
+  }
+
+  if (isEmbedded() && embeddedContext.value.mode === 'legacy-create') {
+    createEmbeddedMissionFromContext();
+  }
+};
+
+const loadEmbeddedEditMission = (mission = null) => {
+  if (!mission || typeof mission !== 'object') return;
+
+  const normalizedMission = normalizeMission(JSON.parse(JSON.stringify(mission)));
+  embeddedContext.value = {
+    ...embeddedContext.value,
+    missionId: normalizedMission.id || embeddedContext.value.missionId,
+    missionName: normalizedMission.name || normalizedMission.config?.missionName || embeddedContext.value.missionName,
+    aircraftModel: normalizedMission.config?.aircraftModel || embeddedContext.value.aircraftModel,
+    routeType: normalizedMission.config?.routeType || embeddedContext.value.routeType
+  };
+  previewMission.value = null;
+  editingMission.value = normalizedMission;
+  currentView.value = 'editor';
+};
+
+const handleIframeMessage = (event) => {
+  const data = event?.data;
+  if (!data || typeof data !== 'object') return;
+
+  if (data.source === BRIDGE_MESSAGE_SOURCE) {
+    if (data.action === 'load-edit-mission') {
+      loadEmbeddedEditMission(data.payload?.mission);
+    }
+    return;
+  }
+
+  if (data.type !== 'wayline:init') return;
+  applyEmbeddedContext(data.payload || {});
+};
+
+const clearUiStateStorage = () => {
+  try {
+    sessionStorage.removeItem(UI_STATE_STORAGE_KEY);
+  } catch (error) {
+    console.warn('Failed to clear waypoint editor UI state', error);
+  }
+};
+
+const saveUiStateToStorage = () => {
+  if (isEmbedded()) {
+    clearUiStateStorage();
+    return;
+  }
+
+  try {
+    if (currentView.value === 'editor' && editingMission.value) {
+      sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify({
+        currentView: 'editor',
+        editingMission: editingMission.value
+      }));
+      return;
+    }
+
+    sessionStorage.removeItem(UI_STATE_STORAGE_KEY);
+  } catch (error) {
+    console.warn('Failed to save waypoint editor UI state', error);
+  }
+};
+
+const restoreUiStateFromStorage = () => {
+  if (isEmbedded()) {
+    clearUiStateStorage();
+    return;
+  }
+
+  try {
+    const saved = sessionStorage.getItem(UI_STATE_STORAGE_KEY);
+    if (!saved) return;
+
+    const parsed = JSON.parse(saved);
+    if (parsed?.currentView === 'editor' && parsed?.editingMission) {
+      editingMission.value = normalizeMission(parsed.editingMission);
+      currentView.value = 'editor';
+    }
+  } catch (error) {
+    console.warn('Failed to restore waypoint editor UI state', error);
+    sessionStorage.removeItem(UI_STATE_STORAGE_KEY);
+  }
+};
+
+const usesReferenceWaypointExport = (routeType) => {
+  return true;
+};
+
+const normalizeMissionConfig = (config = {}) => {
+  const modelMeta = getAircraftModelMeta(config.aircraftModel);
+  if (!modelMeta) return { ...config, routeType: 'waypoint' };
+
+  const exportMeta = getV2CompatibleWaypointExportMeta(config.aircraftModel);
+
+  return {
+    ...config,
+    routeType: 'waypoint',
+    aircraftSeries: config.aircraftSeries || modelMeta.aircraftSeries,
+    ...exportMeta
+  };
+};
+
+const normalizeMission = (mission = {}) => ({
+  ...mission,
+  config: normalizeMissionConfig(mission.config || {})
+});
+
+// 统一地图数据源：优先使用编辑器数据，兜底使用任务库预览数据
+// 使用缓存机制防止每次计算都返回新对象，避免触发 MapViewer 重新初始化
+const activeMapDataCache = ref(null);
+const activeMapData = computed(() => {
+  const m = currentView.value === 'editor' ? editingMission.value : previewMission.value;
+
+  // 默认数据结构
+  const defaultData = {
+    waypoints: [],
+    config: {},
+    scanPath: [],
+    coverageArea: [],
+    cuttingSegments: [],
+    routeType: 'waypoint',
+    isClosedLoop: false,
+    selectedWpIndex: -1,
+    executeHeightMode: 'relativeToStartPoint',
+    takeoffPoint: { lat: 0, lng: 0, height: 0 },
+    activeRegionId: 1,
+    leftOverlayOffset: currentView.value === 'editor' ? 420 : 330
+  };
+
+  if (!m) {
+    // 如果缓存的也是空数据，直接复用，避免创建新对象
+    if (activeMapDataCache.value && activeMapDataCache.value.waypoints.length === 0) {
+      return activeMapDataCache.value;
+    }
+    activeMapDataCache.value = defaultData;
+    return defaultData;
+  }
+
+  const newData = {
+    waypoints: m.waypoints || [],
+    routeType: m.config?.routeType || 'waypoint',
+    scanPath: m.scanPath || [],
+    coverageArea: m.coverageArea || [],
+    cuttingSegments: m.cuttingSegments || [],
+    isClosedLoop: m.config?.isClosedLoop || false,
+    selectedWpIndex: m._selectedWpIndex ?? -1,
+    executeHeightMode: m.config?.executeHeightMode || 'relativeToStartPoint',
+    takeoffPoint: m.config?.takeoffPoint || { lat: m.config?.takeOffPointLat, lng: m.config?.takeOffPointLng, height: m.config?.takeOffPointHeight || 0 },
+    activeRegionId: 1,
+    leftOverlayOffset: currentView.value === 'editor' ? 420 : 330
+  };
+
+  // 浅对比：如果关键字段没变，复用旧对象引用
+  if (activeMapDataCache.value) {
+    const cached = activeMapDataCache.value;
+    const sameWaypoints = cached.waypoints === newData.waypoints;
+    const sameRouteType = cached.routeType === newData.routeType;
+    const sameScanPath = cached.scanPath === newData.scanPath;
+    const sameCoverageArea = cached.coverageArea === newData.coverageArea;
+    const sameCuttingSegments = cached.cuttingSegments === newData.cuttingSegments;
+    const sameClosedLoop = cached.isClosedLoop === newData.isClosedLoop;
+    const sameSelectedIndex = cached.selectedWpIndex === newData.selectedWpIndex;
+    const sameExecuteHeightMode = cached.executeHeightMode === newData.executeHeightMode;
+    const sameActiveRegionId = cached.activeRegionId === newData.activeRegionId;
+    const sameLeftOverlayOffset = cached.leftOverlayOffset === newData.leftOverlayOffset;
+    const sameTakeoffPoint = cached.takeoffPoint?.lat === newData.takeoffPoint?.lat
+      && cached.takeoffPoint?.lng === newData.takeoffPoint?.lng
+      && cached.takeoffPoint?.height === newData.takeoffPoint?.height;
+
+    if (
+      sameWaypoints
+      && sameRouteType
+      && sameScanPath
+      && sameCoverageArea
+      && sameCuttingSegments
+      && sameClosedLoop
+      && sameSelectedIndex
+      && sameExecuteHeightMode
+      && sameActiveRegionId
+      && sameLeftOverlayOffset
+      && sameTakeoffPoint
+    ) {
+      return cached;
+    }
+  }
+
+  activeMapDataCache.value = newData;
+  return newData;
+});
+
+// 处理布局自适应：在 FPV 预览模式下将地图缩小至挂载位
+const mapLayoutClass = computed(() => {
+  if (currentView.value === 'editor' && editingMission.value?._mapLayout === 'inset') {
+    return 'map-layout-inset';
+  }
+  return 'map-layout-fullscreen';
+});
+
+const handleTakeoffHeightUpdate = (h) => {
+  const m = currentView.value === 'editor' ? editingMission.value : previewMission.value;
+  if (!m || !m.config) return;
+
+  if (!m.config.takeoffPoint) {
+    m.config.takeoffPoint = { lat: null, lng: null, height: 0 };
+  }
+  m.config.takeoffPoint.height = h;
+};
+
+const handleMissionUpdate = (data) => {
+  if (editingMission.value) {
+    // 使用对象展开确保响应式系统能检测到深层变化
+    editingMission.value = {
+      ...editingMission.value,
+      waypoints: [...data.waypoints],
+      config: normalizeMissionConfig({ ...data.config, routeType: 'waypoint' }),
+      scanPath: [],
+      coverageArea: [],
+      cuttingSegments: [],
+      _selectedWpIndex: data.selectedWpIndex,
+      _mapLayout: data.mapLayout !== undefined ? data.mapLayout : editingMission.value._mapLayout,
+      _fovData: data.fovData !== undefined ? data.fovData : editingMission.value._fovData
+    };
+  }
+};
+
+// 监听 FOV 数据变更并转发给 MapViewer 组件
+watch(() => editingMission.value?._fovData, (fov) => {
+  if (mapRef.value) {
+    if (fov) {
+      if (mapRef.value.updateFov) mapRef.value.updateFov(fov.dronePos, fov.gimbalAtt, fov.focalLength, fov.previewMode);
+    } else {
+      if (mapRef.value.clearFov) mapRef.value.clearFov();
+    }
+  }
+}, { deep: true });
+
+// 处理地图点击与事件转发
+const onMapClick = (e) => {
+  if (currentView.value === 'editor' && editorRef.value) {
+    const m = editingMission.value;
+    // 自动捕获起飞点逻辑：在任何模式下，如果没有设置起飞点且航点数少于 1，则首个点击点自动作为起飞基准点
+    if (m && (!m.waypoints || m.waypoints.length === 0) && !m.config.takeOffPointLat) {
+      m.config.takeOffPointLat = e.lat;
+      m.config.takeOffPointLng = e.lng;
+      m.config.takeOffPointHeight = e.terrainHeight || 0;
+      m.config.takeoffPoint = { lat: e.lat, lng: e.lng, height: e.terrainHeight || 0 };
+    }
+
+    if (editorRef.value.onMapClick) {
+      editorRef.value.onMapClick(e);
+    }
+  }
+};
+
+const onInsertWaypoint = (data) => {
+  if (currentView.value === 'editor' && editorRef.value?.handleInsertWaypoint) {
+    editorRef.value.handleInsertWaypoint(data);
+  }
+};
+
+const handleRecordPoseFromEditor = (index) => {
+  if (mapRef.value && editorRef.value) {
+    const pose = mapRef.value.getCurrentPose();
+    if (pose) editorRef.value.applyPose(index, pose);
+  }
+};
+
+const handleFovUpdateFromEditor = (fov) => {
+  if (mapRef.value) {
+    if (fov) {
+      if (mapRef.value.updateFov) mapRef.value.updateFov(fov.dronePos, fov.gimbalAtt, fov.focalLength, fov.previewMode);
+    } else {
+      if (mapRef.value.clearFov) mapRef.value.clearFov();
+    }
+  }
+};
+
+const handleVirtualFlightUpdateFromEditor = (state) => {
+  if (!mapRef.value) return;
+  if (state) {
+    if (mapRef.value.updateVirtualFlight) {
+      mapRef.value.updateVirtualFlight(state.dronePos, state.gimbalAtt, state.focalLength);
+    }
+  } else if (mapRef.value.clearVirtualFlight) {
+    mapRef.value.clearVirtualFlight();
+  }
+};
+
+// 监听航点变化：自动追踪相机 (兼容旧版直接更新逻辑)
+watch(() => activeMapData.value.waypoints, (newWps) => {
+  if (currentView.value === 'editor' && newWps?.length > 0) {
+    // 编辑器模式下的逻辑：通常由编辑器主动触发 flyTo，这里作为兜底
+  }
+}, { deep: false });
+
+const handlePreviewMission = (id) => {
+  const mission = missions.value.find(m => m.id === id);
+  if (mission) {
+    previewMission.value = mission;
+  }
+};
+const defaultMissionConfig = {
+  missionName: '未命名航线',
+  routeType: 'waypoint',
+  aircraftSeries: 'm30',
+  aircraftModel: 'm30t',
+  droneEnumValue: 67,
+  droneSubEnumValue: 0,
+  payloadEnumValue: 52,
+  payloadSubEnumValue: 0,
+  flyToWaylineMode: 'safely',
+  finishAction: 'goHome',
+  exitOnRCLost: 'executeLostAction',
+  executeRCLostAction: 'goBack',
+  takeOffSecurityHeight: 70,
+  globalSpeed: 5,
+  globalHeight: 70,
+  globalTransitionalSpeed: 5,
+  takeoffSpeed: 5,
+  globalYawMode: 'path',
+  isClosedLoop: false,
+  isReverse: false,
+  globalAction: 'none',
+  gimbalPitch: -90,
+  hoverTime: 0,
+  photoInterval: 2,
+  shootPhoto: false,
+  recordVideo: false,
+  executeHeightMode: 'relativeToStartPoint',
+  gimbalPitchMode: 'manual',
+  climbMode: 'vertical',
+  caliFlightEnable: false,
+  takeOffPoint: null,
+  takeOffPointLat: null,
+  takeOffPointLng: null,
+  takeOffPointHeight: 0,
+  aiPatrol: {
+    scanSpacing: 20,
+    direction: 0,
+    margin: 0,
+    enabled: false,
+    confidence: 80,
+    cameraMode: 'visible',
+    gimbalPitchAngle: -45,
+    recordEnable: true,
+    customTitle: '',
+    customText: '检测到异常目标',
+    targets: {
+      people: true,
+      vehicle: false,
+      boat: false
+    },
+    targetRules: {
+      people: { operator: '>', value: 1 },
+      vehicle: { operator: '>', value: 1 },
+      boat: { operator: '>', value: 1 }
+    },
+    alarmActions: {
+      snapshot: true,
+      record: true,
+      waitControl: false,
+      speaker: false,
+      searchlight: false
+    }
+  },
+  scanSetting: {
+    aiEnabled: false,
+    confidence: 80,
+    cameraMode: 'visible',
+    overlap: 20,
+    angle: 0,
+    margin: 0
+  },
+  polygonRoute: {
+    collectionType: 'ortho',
+    smartOblique: false,
+    gsd: 2.0,
+    spacingMode: 'auto',
+    spacing: 30,
+    cameraPreset: 'm4t',
+    overlapLateral: 0.7,
+    overlapLongitudinal: 0.8,
+    angle: 0,
+    margin: 0,
+    optimizePath: true
+  },
+  stripRoute: {
+    leftExtension: 50,
+    rightExtension: 50,
+    cuttingDistance: 1000,
+    routeMode: 'zigzag',
+    overlap: 70,
+    overlapLongitudinal: 80,
+    angle: 0,
+    routeDirection: 'parallel',
+    cameraTypes: ['visible'],
+    gsdVisible: 5,
+    gsdInfrared: 14.06,
+    elevationOptimization: true,
+    edgeImageOptimization: false,
+    includeCenterLine: false,
+    photoMode: 'time',
+    photoInterval: 2,
+    photoDistanceInterval: 10,
+    executeHeightMode: 'realTimeFollowSurface',
+    realTimeFollowSurface: false,
+    regionIds: [1],
+    activeRegionId: 1,
+    waitingTakeoffReference: false
+  },
+  slopeRoute: {
+    editStage: 'CreateArea',
+    inputMode: 'edge',
+    surfaceHeight: 40,
+    minFlightHeight: 5,
+    shootDistance: 30,
+    gsdVisible: 1.07,
+    gsdInfrared: 3,
+    speed: 5.1,
+    overlapW: 70,
+    overlapH: 80,
+    direction: 0,
+    flightSide: 'right',
+    shootMode: 'time',
+    gimbalPitchAngle: 2,
+    safeTakeoffHeight: 20,
+    takeoffSpeed: 15,
+    areaAdjust: {
+      surfaceDistance: 0,
+      rotateYawDegree: 0,
+      rotatePitchDegree: 0
+    }
+  },
+  geometryRoute: {
+    createType: 'polygon',
+    shootDistance: 50,
+    includeTopSurface: true,
+    sideFaceFlightSpeed: 5.1,
+    topFaceFlightSpeed: 4.1,
+    overlapW: 70,
+    overlapH: 80,
+    overlapRate: 100,
+    overlapRotationAngle: 0,
+    shootMode: 'time',
+    missionStartAt: 'bottom',
+    waylineDirection: 'horiz',
+    bottomHeight: 30,
+    topHeight: 75,
+    radius: 30
+  }
+};
+
+onMounted(() => {
+  applyEmbeddedContext(getQueryContext());
+
+  const saved = localStorage.getItem(MISSIONS_STORAGE_KEY);
+  if (saved) {
+    try {
+      missions.value = JSON.parse(saved).map(normalizeMission);
+    } catch (e) {
+      console.error('Failed to load missions', e);
+    }
+  }
+
+  restoreUiStateFromStorage();
+  window.addEventListener('message', handleIframeMessage);
+  postParentMessage('wayline:ready', { version: '1.0.0' });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('message', handleIframeMessage);
+});
+
+const saveMissionsToStorage = () => {
+  localStorage.setItem(MISSIONS_STORAGE_KEY, JSON.stringify(missions.value));
+};
+
+watch([currentView, editingMission], () => {
+  saveUiStateToStorage();
+}, { deep: true });
+
+const handleBackToLibrary = () => {
+  if (isEmbedded()) {
+    postBridgeMessage('back');
+    return;
+  }
+  currentView.value = 'library';
+  editingMission.value = null;
+  previewMission.value = null;
+};
+
+const onMissionCreated = (config) => {
+  // 清空预览数据
+  previewMission.value = null;
+
+  // 直接创建新任务（不要先清空 editingMission，避免地图闪烁）
+  const embeddedPatch = {
+    ...(embeddedContext.value.aircraftModel ? { aircraftModel: embeddedContext.value.aircraftModel } : {}),
+    ...(embeddedContext.value.missionName ? { missionName: embeddedContext.value.missionName } : {})
+  };
+  const mergedConfig = {
+    ...config,
+    ...embeddedPatch,
+    routeType: 'waypoint'
+  };
+  const newMission = {
+    id: embeddedContext.value.missionId || Date.now(),
+    name: mergedConfig.missionName || '未命名航线',
+    config: normalizeMissionConfig({
+      ...defaultMissionConfig,
+      ...mergedConfig
+    }),
+    waypoints: [],
+    scanPath: [],           // 扫描路径（巡逻/测绘/带状）
+    coverageArea: [],       // 覆盖区域（带状）
+    cuttingSegments: [],    // 切割段（带状）
+    routeStats: null,       // 路径统计
+    updatedAt: Date.now()
+  };
+  editingMission.value = newMission;
+  showCreateModal.value = false;
+  currentView.value = 'editor';
+};
+
+const createEmbeddedMissionFromContext = () => {
+  const missionName = embeddedContext.value.missionName || defaultMissionConfig.missionName;
+  const aircraftModel = embeddedContext.value.aircraftModel || defaultMissionConfig.aircraftModel;
+  const modelMeta = getAircraftModelMeta(aircraftModel);
+
+  onMissionCreated({
+    routeType: 'waypoint',
+    missionName,
+    aircraftModel,
+    aircraftSeries: modelMeta?.aircraftSeries || defaultMissionConfig.aircraftSeries
+  });
+};
+
+const selectMission = (id) => {
+  const mission = missions.value.find(m => m.id === id);
+  if (mission) {
+    editingMission.value = normalizeMission(JSON.parse(JSON.stringify(mission))); // 深拷贝防止直接污染列表
+    currentView.value = 'editor';
+  }
+};
+
+const updateAndSaveMission = (updatedData) => {
+  const index = missions.value.findIndex(m => m.id === editingMission.value.id);
+  const finalMission = {
+    ...editingMission.value,
+    config: normalizeMissionConfig(updatedData.config),
+    waypoints: updatedData.waypoints,
+    routeStats: updatedData.routeStats,
+    scanPath: updatedData.scanPath,
+    coverageArea: updatedData.coverageArea,
+    cuttingSegments: updatedData.cuttingSegments,
+    updatedAt: Date.now(),
+    name: updatedData.config.missionName || editingMission.value.name
+  };
+
+  if (index > -1) {
+    missions.value[index] = finalMission;
+  } else {
+    missions.value.push(finalMission);
+  }
+
+  saveMissionsToStorage();
+  if (isEmbedded()) {
+    postBridgeMessage('save', { mission: finalMission });
+    return;
+  }
+  currentView.value = 'library';
+  editingMission.value = null;
+};
+
+const handleWaylineGenerated = (result = {}) => {
+  const payload = {
+    callbackId: embeddedContext.value.callbackId,
+    missionId: result.missionId || embeddedContext.value.missionId || editingMission.value?.id,
+    missionName: result.missionName || embeddedContext.value.missionName || editingMission.value?.name,
+    updatedAt: result.updatedAt || Date.now(),
+    storage: 'local'
+  };
+
+  postParentMessage('wayline:generated', payload);
+};
+
+const handleWaylineGenerateError = (error = {}) => {
+  postParentMessage('wayline:error', {
+    callbackId: embeddedContext.value.callbackId,
+    missionId: error.missionId || embeddedContext.value.missionId || editingMission.value?.id,
+    missionName: error.missionName || embeddedContext.value.missionName || editingMission.value?.name,
+    message: error.message || '生成 KMZ 失败'
+  });
+};
+
+const deleteMission = (id) => {
+  if (confirm('确定要删除该航线吗？')) {
+    missions.value = missions.value.filter(m => m.id !== id);
+    saveMissionsToStorage();
+  }
+};
+
+const downloadKMZ = async (id) => {
+  const mission = missions.value.find(m => m.id === id);
+  if (!mission) return;
+
+  try {
+    const waypoints = mission.waypoints || [];
+    const blob = await generateKMZ(normalizeMissionConfig(mission.config), waypoints, null);
+    downloadWaylineBlob(blob, mission.name);
+  } catch (error) {
+    console.error('Failed to generate KMZ', error);
+  }
+};
+</script>
+
+<style>
+/* 保持核心样式，删除组件内冗余样式 */
+.map-layout-fullscreen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.map-layout-inset {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 335px;
+  height: 245px;
+  z-index: 50;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 2px;
+}
+</style>
