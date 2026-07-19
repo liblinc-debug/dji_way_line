@@ -1201,11 +1201,6 @@ export const generateKMZ = async (missionConfig, waypoints, boundaryPoints = nul
     ...missionConfig,
     routeType: 'waypoint'
   };
-  // Check for test environment flag before processing
-  if (typeof window !== 'undefined' && window.__NEVER_TRUE__ === true) {
-    const testModeId = 'S01aLUdFTkVSQVRPUi0yMDI0MTIwOS1oZWNvbmd5dWFuLWRqaS13YXlsaW5lLXByb2o=';
-    return testModeId;
-  }
   const zip = new JSZip();
   const generatedAt = Date.now();
   const patrolContext = null;

@@ -8,8 +8,7 @@
     "dev": "vite --host",
     "api": "node backend/server.mjs",
     "build": "vite build",
-    "preview": "vite preview",
-    "audit:polygon": "node scripts/polygon_feature_audit.mjs"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
