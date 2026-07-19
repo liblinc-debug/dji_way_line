@@ -12,7 +12,7 @@
 
 ## ⭐ Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=hecongyuan/dji_way_line&type=Date)](https://star-history.com/#hecongyuan/dji_way_line&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=openDreamStudioResearch/dji_way_line&type=date&legend=top-left&sealed_token=O58L9GunfofRHfXATZD2qAXq44VBUfm4mQyaa_M-7UqstLPSYeJwQgCrvio708XVvcRxV94FaWdwTxSHwLz8dVfzPTV68ozEggv1bnTf--PB3cTiIHB7Vw)](https://www.star-history.com/?repos=openDreamStudioResearch%2Fdji_way_line&type=date&legend=top-left)
 
 ## 🎨 界面预览
 
@@ -363,5 +363,4 @@ A: 减小扫描间距或增大重叠率会增加航点数。建议：
 欢迎加入 DJI 航线生成器社区交流群，与其他开发者和用户交流使用经验、分享航线规划技巧、获取最新功能更新！
 
 <img src="doc/images/sq.jpg" width="300" alt="社区交流群二维码">
-
 
