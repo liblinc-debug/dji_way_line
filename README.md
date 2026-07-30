@@ -192,7 +192,7 @@ npm run build
 
 ## 📁 项目结构
 
-```
+```raw
 way_line/
 ├── src/
 │   ├── components/
@@ -261,7 +261,7 @@ const d = R · c;
 
 生成的 KMZ 文件符合 DJI WPML 1.0.6 标准：
 
-```
+```raw
 mission.kmz
 └── wpmz/
     ├── template.kml       # 模板定义（区域、参数）

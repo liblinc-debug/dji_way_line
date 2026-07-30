@@ -1,9 +1,17 @@
 <script setup>
+import { computed } from 'vue'
+import AdminConsole from './components/AdminConsole.vue'
 import WaypointGenerator from './components/WaypointGenerator/index.vue';
+
+const isAdminView = computed(() => {
+  const query = new URLSearchParams(window.location.search)
+  return query.get('view') === 'admin'
+})
 </script>
 
 <template>
-  <WaypointGenerator />
+  <AdminConsole v-if="isAdminView" />
+  <WaypointGenerator v-else />
 </template>
 
 <style>
