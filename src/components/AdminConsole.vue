@@ -226,256 +226,370 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="admin-root">
-    <header class="admin-header">
-      <div>
-        <h1>UAV Task 管理与发布中心</h1>
-        <p>覆盖 M1-M4：机型、飞机、发布、ACK、状态回放</p>
-      </div>
-      <div class="api-config">
-        <span>API Base</span>
-        <input v-model="apiBase" placeholder="http://127.0.0.1:8090" />
-        <button @click="applyApiBase">连接</button>
-      </div>
-    </header>
-
-    <p v-if="errorText" class="error">{{ errorText }}</p>
-
-    <div class="grid-2">
-      <section class="panel">
-        <h2>机型管理</h2>
-        <div class="row">
-          <input v-model="modelForm.modelCode" placeholder="modelCode" />
-          <input v-model="modelForm.modelName" placeholder="modelName" />
-          <input v-model="modelForm.vendor" placeholder="vendor" />
+  <div class="admin-root flex h-screen w-screen overflow-hidden font-sans bg-[#f3f4f6] text-gray-800">
+    <aside class="h-full w-[360px] shrink-0 border-r border-gray-200 bg-white shadow-lg flex flex-col min-h-0">
+      <div class="p-4 bg-gray-50 border-b border-gray-200">
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h2 class="m-0 text-base font-medium text-gray-900">任务运营中心</h2>
+            <p class="m-0 mt-1 text-xs text-gray-500">机型、飞机、发布、ACK、状态回放</p>
+          </div>
+          <a-tag color="blue">M1-M4</a-tag>
         </div>
-        <div class="row checks">
-          <label><input type="checkbox" v-model="modelForm.supports_gimbal" /> supports_gimbal</label>
-          <label><input type="checkbox" v-model="modelForm.supports_actuator" /> supports_actuator</label>
-          <button @click="createModel">新增机型</button>
-          <button @click="loadModels" :disabled="loading.models">刷新</button>
+        <div class="flex gap-2 items-center">
+          <a-input :value="apiBase" size="small" placeholder="http://127.0.0.1:8090" @update:value="apiBase = $event" />
+          <a-button size="small" type="primary" @click="applyApiBase">连接</a-button>
         </div>
-        <table>
-          <thead>
-            <tr><th>编码</th><th>名称</th><th>厂商</th><th>能力</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in models" :key="item.modelCode">
-              <td>{{ item.modelCode }}</td>
-              <td>{{ item.modelName }}</td>
-              <td>{{ item.vendor || '-' }}</td>
-              <td>{{ JSON.stringify(item.capabilities || {}) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="panel">
-        <h2>飞机资产管理</h2>
-        <div class="row">
-          <input v-model="aircraftForm.aircraftId" placeholder="aircraftId" />
-          <input v-model="aircraftForm.name" placeholder="name" />
-          <input v-model="aircraftForm.modelCode" placeholder="modelCode" />
-        </div>
-        <div class="row">
-          <input v-model="aircraftForm.ipAddr" placeholder="ipAddr" />
-          <select v-model="aircraftForm.status">
-            <option value="online">online</option>
-            <option value="offline">offline</option>
-            <option value="maintenance">maintenance</option>
-          </select>
-          <button @click="createAircraft">新增飞机</button>
-          <button @click="loadAircrafts" :disabled="loading.aircrafts">刷新</button>
-        </div>
-        <table>
-          <thead>
-            <tr><th>ID</th><th>名称</th><th>机型</th><th>IP</th><th>状态</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in aircrafts" :key="item.aircraftId">
-              <td>{{ item.aircraftId }}</td>
-              <td>{{ item.name }}</td>
-              <td>{{ item.modelCode }}</td>
-              <td>{{ item.ipAddr }}</td>
-              <td>{{ item.status }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-    </div>
-
-    <section class="panel">
-      <h2>任务发布中心</h2>
-      <div class="row">
-        <select v-model="dispatchForm.missionId">
-          <option disabled value="">选择 mission</option>
-          <option v-for="m in missions" :key="m.missionId" :value="m.missionId">{{ m.missionId }}</option>
-        </select>
-        <select v-model="dispatchForm.aircraftId">
-          <option disabled value="">选择 aircraft</option>
-          <option v-for="a in aircrafts" :key="a.aircraftId" :value="a.aircraftId">{{ a.aircraftId }}</option>
-        </select>
-        <select v-model="dispatchForm.priority">
-          <option value="P1">P1</option>
-          <option value="P2">P2</option>
-          <option value="P3">P3</option>
-        </select>
-        <input v-model="dispatchForm.operator" placeholder="operator" />
-        <label><input type="checkbox" v-model="dispatchForm.dry_run" /> dry_run</label>
-        <button @click="dispatchMission" :disabled="loading.dispatch">发布</button>
-        <button @click="loadMissions" :disabled="loading.missions">刷新任务</button>
       </div>
 
-      <div v-if="createdDispatch" class="hint">
-        <div>dispatchId: {{ createdDispatch.dispatchId }}</div>
-        <div>status: {{ createdDispatch.dispatchStatus }}</div>
-      </div>
+      <div class="flex-1 overflow-y-auto p-3 space-y-3 admin-scrollbar">
+        <section class="admin-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">机型管理</div>
+              <div class="panel-subtitle">能力模板维护</div>
+            </div>
+            <a-button type="text" size="small" @click="loadModels" :loading="loading.models">刷新</a-button>
+          </div>
+          <div class="space-y-2">
+            <a-input :value="modelForm.modelCode" size="small" placeholder="机型编码 modelCode" @update:value="modelForm.modelCode = $event" />
+            <a-input :value="modelForm.modelName" size="small" placeholder="机型名称 modelName" @update:value="modelForm.modelName = $event" />
+            <a-input :value="modelForm.vendor" size="small" placeholder="厂商 vendor" @update:value="modelForm.vendor = $event" />
+            <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+              <div class="text-[11px] font-medium text-gray-500 mb-2">能力开关</div>
+              <div class="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-700">
+                <a-checkbox :checked="modelForm.supports_gimbal" @update:checked="modelForm.supports_gimbal = $event">supports_gimbal</a-checkbox>
+                <a-checkbox :checked="modelForm.supports_actuator" @update:checked="modelForm.supports_actuator = $event">supports_actuator</a-checkbox>
+              </div>
+            </div>
+            <a-button block type="primary" @click="createModel">新增机型</a-button>
+          </div>
+          <a-list class="mt-3" :data-source="models" :split="false">
+            <template #renderItem="{ item }">
+              <div class="list-item-card">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium text-gray-900 truncate">{{ item.modelName }}</div>
+                    <div class="text-[11px] text-gray-400 mt-1">{{ item.modelCode }} <span v-if="item.vendor">· {{ item.vendor }}</span></div>
+                  </div>
+                  <a-tag color="processing">{{ Object.keys(item.capabilities || {}).length }} 能力</a-tag>
+                </div>
+                <div class="text-[11px] text-gray-500 mt-2 break-all">{{ JSON.stringify(item.capabilities || {}) }}</div>
+              </div>
+            </template>
+            <template #empty>
+              <a-empty description="暂无机型" />
+            </template>
+          </a-list>
+        </section>
 
-      <div class="row">
-        <input v-model="ackForm.dispatchId" placeholder="dispatchId" />
-        <input v-model="ackForm.correlationId" placeholder="correlationId" />
-        <button @click="sendAck">手工注入 ACK(success)</button>
-        <button @click="loadDispatchEvents">查看事件</button>
-        <button @click="loadReplay" :disabled="loading.replay">状态回放</button>
+        <section class="admin-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">飞机资产</div>
+              <div class="panel-subtitle">在线状态与机型绑定</div>
+            </div>
+            <a-button type="text" size="small" @click="loadAircrafts" :loading="loading.aircrafts">刷新</a-button>
+          </div>
+          <div class="space-y-2">
+            <a-input :value="aircraftForm.aircraftId" size="small" placeholder="飞机 ID aircraftId" @update:value="aircraftForm.aircraftId = $event" />
+            <a-input :value="aircraftForm.name" size="small" placeholder="展示名称" @update:value="aircraftForm.name = $event" />
+            <a-input :value="aircraftForm.modelCode" size="small" placeholder="机型编码 modelCode" @update:value="aircraftForm.modelCode = $event" />
+            <div class="grid grid-cols-[1fr_120px] gap-2">
+              <a-input :value="aircraftForm.ipAddr" size="small" placeholder="IP 地址 ipAddr" @update:value="aircraftForm.ipAddr = $event" />
+              <a-select :value="aircraftForm.status" size="small" @update:value="aircraftForm.status = $event">
+                <a-select-option value="online">online</a-select-option>
+                <a-select-option value="offline">offline</a-select-option>
+                <a-select-option value="maintenance">maintenance</a-select-option>
+              </a-select>
+            </div>
+            <a-button block type="primary" @click="createAircraft">新增飞机</a-button>
+          </div>
+          <a-list class="mt-3" :data-source="aircrafts" :split="false">
+            <template #renderItem="{ item }">
+              <div class="list-item-card">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</div>
+                    <div class="text-[11px] text-gray-400 mt-1">{{ item.aircraftId }} · {{ item.modelCode }}</div>
+                  </div>
+                  <a-tag :color="item.status === 'online' ? 'success' : item.status === 'maintenance' ? 'warning' : 'default'">
+                    {{ item.status }}
+                  </a-tag>
+                </div>
+                <div class="text-[11px] text-gray-500 mt-2">{{ item.ipAddr || '-' }}</div>
+              </div>
+            </template>
+            <template #empty>
+              <a-empty description="暂无飞机" />
+            </template>
+          </a-list>
+        </section>
       </div>
+    </aside>
 
-      <div class="grid-2">
+    <main class="flex-1 h-full min-w-0 flex flex-col">
+      <div class="px-5 py-4 border-b border-gray-200 bg-white/85 backdrop-blur-sm flex items-center justify-between gap-4">
         <div>
-          <h3>发布事件流</h3>
-          <pre>{{ JSON.stringify(dispatchEvents, null, 2) }}</pre>
+          <div class="text-[10px] font-black uppercase tracking-widest text-gray-400">Dispatch Center</div>
+          <div class="text-lg font-semibold text-gray-800 mt-1">任务发布中心</div>
         </div>
-        <div>
-          <h3>回放结果（事件 + Redpanda 状态）</h3>
-          <pre>{{ JSON.stringify(dispatchReplay, null, 2) }}</pre>
+        <div class="flex items-center gap-2 text-xs text-gray-500">
+          <span>missions {{ missions.length }}</span>
+          <span class="w-1 h-1 rounded-full bg-gray-300"></span>
+          <span>aircrafts {{ aircrafts.length }}</span>
+          <span class="w-1 h-1 rounded-full bg-gray-300"></span>
+          <span>models {{ models.length }}</span>
         </div>
       </div>
-    </section>
+
+      <div class="flex-1 min-h-0 overflow-y-auto p-5 admin-scrollbar">
+        <a-alert v-if="errorText" class="mb-4" type="error" show-icon :message="errorText" />
+
+        <section class="editor-shell mb-5">
+          <div class="editor-shell-head">
+            <div class="flex items-center gap-2">
+              <span class="text-blue-600 font-bold">🛫</span>
+              <span class="font-bold tracking-tight text-gray-700">发布配置</span>
+            </div>
+            <div class="flex gap-2">
+              <a-button size="small" @click="loadMissions" :loading="loading.missions">刷新任务</a-button>
+              <a-button size="small" type="primary" @click="dispatchMission" :loading="loading.dispatch">发布任务</a-button>
+            </div>
+          </div>
+
+          <div class="grid xl:grid-cols-[1.2fr_1fr] gap-4 p-4 bg-white">
+            <div class="space-y-3">
+              <div>
+                <div class="field-label">任务选择</div>
+                <a-select :value="dispatchForm.missionId" class="w-full" placeholder="选择 mission" @update:value="dispatchForm.missionId = $event">
+                  <a-select-option v-for="m in missions" :key="m.missionId" :value="m.missionId">{{ m.missionId }}</a-select-option>
+                </a-select>
+              </div>
+              <div>
+                <div class="field-label">飞机选择</div>
+                <a-select :value="dispatchForm.aircraftId" class="w-full" placeholder="选择 aircraft" @update:value="dispatchForm.aircraftId = $event">
+                  <a-select-option v-for="a in aircrafts" :key="a.aircraftId" :value="a.aircraftId">{{ a.aircraftId }} · {{ a.name }}</a-select-option>
+                </a-select>
+              </div>
+              <div class="grid md:grid-cols-[120px_1fr] gap-3">
+                <div>
+                  <div class="field-label">优先级</div>
+                  <a-select :value="dispatchForm.priority" class="w-full" @update:value="dispatchForm.priority = $event">
+                    <a-select-option value="P1">P1</a-select-option>
+                    <a-select-option value="P2">P2</a-select-option>
+                    <a-select-option value="P3">P3</a-select-option>
+                  </a-select>
+                </div>
+                <div>
+                  <div class="field-label">操作员</div>
+                  <a-input :value="dispatchForm.operator" placeholder="operator" @update:value="dispatchForm.operator = $event" />
+                </div>
+              </div>
+              <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                <a-checkbox :checked="dispatchForm.dry_run" @update:checked="dispatchForm.dry_run = $event">dry_run，仅做能力校验不下发</a-checkbox>
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <div class="text-[10px] font-black uppercase tracking-widest text-gray-400">最近发布</div>
+              <div v-if="createdDispatch" class="mt-3 space-y-2 text-sm">
+                <div class="dispatch-meta-row"><span>dispatchId</span><strong>{{ createdDispatch.dispatchId }}</strong></div>
+                <div class="dispatch-meta-row"><span>status</span><a-tag color="processing">{{ createdDispatch.dispatchStatus }}</a-tag></div>
+                <div class="dispatch-meta-row"><span>aircraft</span><strong>{{ createdDispatch.aircraftId }}</strong></div>
+                <div class="dispatch-meta-row"><span>mission</span><strong>{{ createdDispatch.missionId }}</strong></div>
+              </div>
+              <a-empty v-else class="mt-6" description="尚未发布任务" />
+            </div>
+          </div>
+        </section>
+
+        <div class="grid xl:grid-cols-[380px_1fr] gap-5 min-h-[420px]">
+          <section class="editor-shell">
+            <div class="editor-shell-head">
+              <div class="flex items-center gap-2">
+                <span class="text-emerald-500 text-[8px] animate-pulse">●</span>
+                <span class="font-bold tracking-tight text-gray-700">ACK 注入与事件查询</span>
+              </div>
+              <a-button size="small" @click="loadDispatchEvents">查看事件</a-button>
+            </div>
+            <div class="p-4 bg-white space-y-3">
+              <div>
+                <div class="field-label">dispatchId</div>
+                <a-input :value="ackForm.dispatchId" placeholder="dispatchId" @update:value="ackForm.dispatchId = $event" />
+              </div>
+              <div>
+                <div class="field-label">correlationId</div>
+                <a-input :value="ackForm.correlationId" placeholder="correlationId" @update:value="ackForm.correlationId = $event" />
+              </div>
+              <div class="flex gap-2">
+                <a-button type="primary" @click="sendAck">注入 ACK(success)</a-button>
+                <a-button @click="loadReplay" :loading="loading.replay">状态回放</a-button>
+              </div>
+              <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+                发布后会自动提取第一条带 correlationId 的 command.sent 事件，便于回放调试。
+              </div>
+            </div>
+          </section>
+
+          <section class="editor-shell">
+            <div class="editor-shell-head">
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-black uppercase tracking-widest text-gray-400">Replay</span>
+                <span class="font-bold tracking-tight text-gray-700">事件流与状态回放</span>
+              </div>
+            </div>
+            <div class="grid lg:grid-cols-2 gap-0 border-t border-gray-200 min-h-[360px]">
+              <div class="bg-white border-r border-gray-200 min-h-0 flex flex-col">
+                <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                  <div class="text-xs font-medium text-gray-700">发布事件流</div>
+                </div>
+                <pre class="console-view flex-1">{{ JSON.stringify(dispatchEvents, null, 2) }}</pre>
+              </div>
+              <div class="bg-white min-h-0 flex flex-col">
+                <div class="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                  <div class="text-xs font-medium text-gray-700">回放结果（事件 + Redpanda 状态）</div>
+                </div>
+                <pre class="console-view flex-1">{{ JSON.stringify(dispatchReplay, null, 2) }}</pre>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
   </div>
 </template>
 
 <style scoped>
 .admin-root {
-  min-height: 100vh;
-  background: #f4f6f9;
-  padding: 20px;
-  color: #1f2a37;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
-.admin-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.admin-header h1 {
-  margin: 0;
-  font-size: 24px;
-}
-
-.admin-header p {
-  margin: 6px 0 0;
-  color: #6b7280;
-}
-
-.api-config {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.error {
-  padding: 10px 12px;
-  background: #fee2e2;
-  color: #991b1b;
-  border-radius: 8px;
-}
-
-.grid-2 {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.panel {
-  background: #ffffff;
+.admin-card,
+.editor-shell {
+  border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 16px;
+  overflow: hidden;
+  background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-  margin-bottom: 16px;
 }
 
-.panel h2 {
-  margin-top: 0;
-}
-
-.row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-input,
-select,
-button {
-  height: 34px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  padding: 0 10px;
-}
-
-button {
-  background: #0f766e;
-  color: #fff;
-  cursor: pointer;
-  border: none;
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
+.panel-head,
+.editor-shell-head {
+  padding: 12px 14px;
   border-bottom: 1px solid #e5e7eb;
-  text-align: left;
-  padding: 8px;
-  font-size: 13px;
+  background: #f9fafb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-pre {
-  background: #0b1020;
-  color: #e6edf3;
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.panel-subtitle,
+.field-label {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.field-label {
+  margin-bottom: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.list-item-card {
+  background: #f9fafb;
+  border: 1px solid transparent;
   border-radius: 8px;
-  padding: 10px;
+  padding: 12px;
+  margin-top: 8px;
+  transition: all 0.2s ease;
+}
+
+.list-item-card:hover {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+
+.dispatch-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #e5e7eb;
+}
+
+.dispatch-meta-row:last-child {
+  border-bottom: none;
+}
+
+.dispatch-meta-row span {
+  color: #9ca3af;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dispatch-meta-row strong {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.console-view {
+  margin: 0;
+  padding: 14px;
   overflow: auto;
-  min-height: 140px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
-.hint {
-  background: #ecfeff;
-  border: 1px solid #67e8f9;
+.admin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.admin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 999px;
+}
+
+:deep(.ant-list-empty-text) {
+  padding: 20px 0 8px;
+}
+
+:deep(.ant-input),
+:deep(.ant-select-selector) {
+  border-radius: 8px !important;
+}
+
+:deep(.ant-btn) {
   border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 10px;
 }
 
-@media (max-width: 1000px) {
-  .grid-2 {
-    grid-template-columns: 1fr;
+@media (max-width: 1100px) {
+  .admin-root {
+    flex-direction: column;
   }
 
-  .admin-header {
-    flex-direction: column;
+  .admin-root > aside {
+    width: 100%;
+    height: auto;
+    max-height: 48vh;
+  }
+
+  .admin-root > main {
+    min-height: 52vh;
   }
 }
 </style>
