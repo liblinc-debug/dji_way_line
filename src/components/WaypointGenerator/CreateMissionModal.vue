@@ -22,24 +22,14 @@
       </div>
 
       <div class="mb-4">
-        <h3 class="section-title mb-2">选择飞行器</h3>
+        <h3 class="section-title mb-2">选择型号（机型管理）</h3>
+        <div class="text-[11px] text-gray-500 mb-2">优先显示你在机型管理中定义的机型；若未配置则回退到内置机型。</div>
+        <div v-if="modelLoadError" class="text-[11px] text-red-500 mb-2">{{ modelLoadError }}</div>
         <a-row :gutter="12">
-          <a-col :span="4" v-for="aircraft in aircraftSeriesList" :key="aircraft.id">
-            <div class="aircraft-card" :class="{ 'aircraft-card-active': form.aircraftSeries === aircraft.id }"
-              @click="selectSeries(aircraft.id)">
-              {{ aircraft.name }}
-            </div>
-          </a-col>
-        </a-row>
-      </div>
-
-      <div class="mb-4">
-        <h3 class="section-title mb-2">选择型号</h3>
-        <a-row :gutter="12">
-          <a-col :span="4" v-for="model in currentModels" :key="model.key">
-            <div class="aircraft-card" :class="{ 'aircraft-card-active': form.aircraftModel === model.modelId }"
-              @click="form.aircraftModel = model.modelId">
-              {{ model.label }}
+          <a-col :span="6" v-for="model in modelOptions" :key="model.modelCode">
+            <div class="aircraft-card" :class="{ 'aircraft-card-active': form.aircraftModel === model.modelCode }"
+              @click="form.aircraftModel = model.modelCode">
+              {{ model.modelName }}
             </div>
           </a-col>
         </a-row>
@@ -47,7 +37,25 @@
 
       <div class="mb-0">
         <h3 class="section-title mb-2">航线名称</h3>
-        <a-input v-model:value="form.missionName" placeholder="请输入航线名称" />
+        <a-input :value="form.missionName" placeholder="请输入航线名称" @update:value="form.missionName = $event" />
+      </div>
+
+      <div class="mb-0 mt-4">
+        <h3 class="section-title mb-2">适用范围与能力约束（1.2.1）</h3>
+        <div class="text-[12px] text-gray-500 mb-2">航线将按当前选中机型自动绑定，不再绑定具体飞机。</div>
+        <div class="mt-2 flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+          <span class="text-[12px] text-gray-600">自动匹配可执行飞机</span>
+          <a-switch :checked="form.autoMatch" @update:checked="form.autoMatch = $event" />
+        </div>
+        <div class="mt-2">
+          <div class="text-[12px] text-gray-500 mb-1">能力需求（JSON）</div>
+          <a-textarea
+            :value="form.requirementsJson"
+            @update:value="form.requirementsJson = $event"
+            :rows="4"
+            placeholder='如: [{"key":"supports_gimbal","op":"eq","value":true}]'
+          />
+        </div>
       </div>
     </div>
 
@@ -61,12 +69,11 @@
 </template>
 
 <script setup>
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import {
+  AIRCRAFT_MODEL_META,
   getAircraftModelMeta,
-  getLegacyAircraftModelOptions,
-  getV2CompatibleWaypointExportMeta,
-  LEGACY_AIRCRAFT_SERIES_LIST
+  getV2CompatibleWaypointExportMeta
 } from '../../constants/aircraftModels.js';
 
 const props = defineProps({
@@ -81,7 +88,39 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['cancel', 'confirm']);
-const aircraftSeriesList = LEGACY_AIRCRAFT_SERIES_LIST;
+const modelLoadError = ref('');
+const userDefinedModels = ref([]);
+
+const fallbackModels = Object.values(AIRCRAFT_MODEL_META).map((item) => ({
+  modelCode: item.id,
+  modelName: item.name
+}));
+
+const modelOptions = computed(() => (
+  userDefinedModels.value.length ? userDefinedModels.value : fallbackModels
+));
+
+const loadUserDefinedModels = async () => {
+  modelLoadError.value = '';
+  try {
+    const apiBase = localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090';
+    const resp = await fetch(`${apiBase}/models`, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json().catch(() => ({}));
+    const items = Array.isArray(data?.items) ? data.items : [];
+    userDefinedModels.value = items
+      .map((item) => ({
+        modelCode: String(item?.modelCode || '').trim(),
+        modelName: String(item?.modelName || item?.modelCode || '').trim()
+      }))
+      .filter((item) => item.modelCode);
+  } catch (error) {
+    userDefinedModels.value = [];
+    modelLoadError.value = '未获取到机型管理数据，已使用内置机型。';
+  }
+};
 
 const waypointIcon = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 18L9 6L14 14L20 4" stroke-linecap="round" stroke-linejoin="round" /><circle cx="4" cy="18" r="2" fill="currentColor" /><circle cx="9" cy="6" r="2" fill="currentColor" /><circle cx="14" cy="14" r="2" fill="currentColor" /><circle cx="20" cy="4" r="2" fill="currentColor" /></svg>';
 const patrolIcon = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" /><path d="M12 7v5l3 3" /></svg>';
@@ -118,21 +157,27 @@ const routeGroups = [
 
 const form = reactive({
   routeType: 'waypoint',
-  aircraftSeries: 'm30',
   aircraftModel: 'm30t',
-  missionName: '新建航点航线'
+  missionName: '新建航点航线',
+  autoMatch: true,
+  requirementsJson: '[{"key":"supports_gimbal","op":"eq","value":true}]'
 });
 
 const applyInitialValues = (values = {}) => {
   const model = getAircraftModelMeta(values.aircraftModel);
   form.routeType = 'waypoint';
   if (model) {
-    form.aircraftSeries = model.aircraftSeries;
     form.aircraftModel = model.id;
+  } else if (values.aircraftModel) {
+    form.aircraftModel = String(values.aircraftModel);
   }
   if (values.missionName) {
     form.missionName = values.missionName;
   }
+  form.autoMatch = values?.routeLinking?.autoMatch !== false;
+  form.requirementsJson = values?.routeLinking?.requirements
+    ? JSON.stringify(values.routeLinking.requirements, null, 2)
+    : '[{"key":"supports_gimbal","op":"eq","value":true}]';
 };
 
 watch(
@@ -141,7 +186,25 @@ watch(
   { deep: true, immediate: true }
 );
 
-const currentModels = computed(() => getLegacyAircraftModelOptions(form.aircraftSeries, 'waypoint'));
+watch(
+  () => props.visible,
+  (visible) => {
+    if (!visible) return;
+    loadUserDefinedModels();
+  },
+  { immediate: true }
+);
+
+watch(
+  () => modelOptions.value,
+  (options) => {
+    if (!options.length) return;
+    if (!options.some((item) => item.modelCode === form.aircraftModel)) {
+      form.aircraftModel = options[0].modelCode;
+    }
+  },
+  { immediate: true }
+);
 
 const selectRoute = (route) => {
   if (route.disabled) return;
@@ -151,28 +214,24 @@ const selectRoute = (route) => {
   }
 };
 
-const selectSeries = (seriesId) => {
-  form.aircraftSeries = seriesId;
-  const seriesModels = getLegacyAircraftModelOptions(seriesId, 'waypoint');
-  if (seriesModels.length > 0) {
-    form.aircraftModel = seriesModels[0].modelId;
-  }
-};
-
-watch(
-  () => form.aircraftSeries,
-  (seriesId) => {
-    const seriesModels = getLegacyAircraftModelOptions(seriesId, 'waypoint');
-    if (!seriesModels.some((model) => model.modelId === form.aircraftModel)) {
-      form.aircraftModel = seriesModels[0]?.modelId || '';
-    }
-  }
-);
-
 const handleConfirm = () => {
+  let requirements = [];
+  try {
+    const parsed = JSON.parse(form.requirementsJson || '[]');
+    requirements = Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    requirements = [];
+  }
+
   emit('confirm', {
     ...form,
     routeType: 'waypoint',
+    routeLinking: {
+      autoMatch: form.autoMatch,
+      modelCodes: form.aircraftModel ? [form.aircraftModel] : [],
+      aircraftIds: [],
+      requirements
+    },
     ...getV2CompatibleWaypointExportMeta(form.aircraftModel)
   });
 };

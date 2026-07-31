@@ -8,33 +8,16 @@
         </a-button>
       </div>
 
-      <div class="flex gap-3">
-        <a-dropdown>
-          <a class="text-xs text-gray-500 flex items-center gap-1 cursor-pointer hover:text-primary" @click.prevent>
-            全部机型
-            <span class="text-[10px]">▼</span>
-          </a>
-          <template #overlay>
-            <a-menu>
-              <a-menu-item>全部机型</a-menu-item>
-              <a-menu-item>Matrice 30</a-menu-item>
-              <a-menu-item>Mavic 3E/T</a-menu-item>
-            </a-menu>
-          </template>
-        </a-dropdown>
+      <div class="grid grid-cols-2 gap-2">
+        <a-select :value="activeModelFilter" size="small" @update:value="activeModelFilter = $event">
+          <a-select-option value="all">全部机型</a-select-option>
+          <a-select-option v-for="code in modelFilterOptions" :key="code" :value="code">{{ code }}</a-select-option>
+        </a-select>
 
-        <a-dropdown>
-          <a class="text-xs text-gray-500 flex items-center gap-1 cursor-pointer hover:text-primary" @click.prevent>
-            时间倒序
-            <span class="text-[10px]">▼</span>
-          </a>
-          <template #overlay>
-            <a-menu>
-              <a-menu-item>时间倒序</a-menu-item>
-              <a-menu-item>时间正序</a-menu-item>
-            </a-menu>
-          </template>
-        </a-dropdown>
+        <a-select :value="sortOrder" size="small" @update:value="sortOrder = $event">
+          <a-select-option value="desc">时间倒序</a-select-option>
+          <a-select-option value="asc">时间正序</a-select-option>
+        </a-select>
       </div>
     </div>
 
@@ -66,6 +49,11 @@
               <div class="flex items-center gap-1.5 mb-1">
                 <span>{{ getDroneName(item.config.aircraftModel, item.config.droneEnumValue, item.config.droneSubEnumValue) }}</span>
               </div>
+              <div class="flex items-center gap-1 mt-1 flex-wrap">
+                <a-tag v-for="code in getLinkedModelCodes(item)" :key="`${item.id}-${code}`" color="blue" class="!text-[10px] !px-1 !py-0">
+                  {{ code }}
+                </a-tag>
+              </div>
               <div class="text-[11px] text-gray-400 mt-2">
                 <span>更新时间 {{ formatDate(item.updatedAt) }}</span>
               </div>
@@ -86,11 +74,12 @@
 
 <script setup>
 import { Empty } from 'ant-design-vue';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   getDroneDisplayName,
   getLegacyAircraftModelDisplayName
 } from '../../constants/aircraftModels.js';
+import { getMissionLinkingSummary } from '../../utils/routeLinking.js';
 
 const props = defineProps({
   missions: {
@@ -101,12 +90,41 @@ const props = defineProps({
 
 defineEmits(['create', 'select', 'edit', 'delete', 'download']);
 
-const sortedMissions = computed(() => [...props.missions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+const activeModelFilter = ref('all');
+const sortOrder = ref('desc');
+
+const modelFilterOptions = computed(() => {
+  const set = new Set();
+  for (const m of props.missions || []) {
+    const summary = getMissionLinkingSummary(m);
+    for (const code of summary.modelCodes || []) {
+      set.add(code);
+    }
+    if (m?.config?.aircraftModel) {
+      set.add(m.config.aircraftModel);
+    }
+  }
+  return [...set];
+});
+
+const sortedMissions = computed(() => {
+  const filtered = (props.missions || []).filter((m) => {
+    if (activeModelFilter.value === 'all') return true;
+    const summary = getMissionLinkingSummary(m);
+    const linked = summary.modelCodes || [];
+    return linked.includes(activeModelFilter.value) || m?.config?.aircraftModel === activeModelFilter.value;
+  });
+
+  const factor = sortOrder.value === 'asc' ? 1 : -1;
+  return [...filtered].sort((a, b) => ((a.updatedAt || 0) - (b.updatedAt || 0)) * factor);
+});
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE;
 
 const getDroneName = (aircraftModel, droneEnumValue, droneSubEnumValue) => (
   getLegacyAircraftModelDisplayName(aircraftModel) || getDroneDisplayName(droneEnumValue, droneSubEnumValue)
 );
+
+const getLinkedModelCodes = (mission) => getMissionLinkingSummary(mission).modelCodes || [];
 
 const formatDate = (timestamp) => {
   if (!timestamp) return '';

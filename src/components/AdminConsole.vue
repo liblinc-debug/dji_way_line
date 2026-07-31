@@ -1,6 +1,7 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Modal, message } from 'ant-design-vue'
+import { checkRouteAircraftCompatibility, getMissionLinkingSummary } from '../utils/routeLinking.js'
 
 const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090')
 const loading = reactive({
@@ -39,9 +40,11 @@ const aircraftForm = reactive({
 const dispatchForm = reactive({
   missionId: '',
   aircraftId: '',
+  route_id: '',
   dry_run: false,
   priority: 'P2',
-  operator: 'ops'
+  operator: 'ops',
+  auto_filter_aircraft: true
 })
 
 const ackForm = reactive({
@@ -50,6 +53,68 @@ const ackForm = reactive({
 })
 
 const createdDispatch = ref(null)
+const compatibleAircraftRows = ref([])
+const incompatibleAircraftRows = ref([])
+
+const modelCapabilitiesMap = computed(() => {
+  const map = {}
+  for (const m of models.value) {
+    if (m?.modelCode) {
+      map[m.modelCode] = m.capabilities || {}
+    }
+  }
+  return map
+})
+
+const selectedMission = computed(() => missions.value.find((m) => m.missionId === dispatchForm.missionId) || null)
+
+const missionLinkingSummary = computed(() => {
+  if (!selectedMission.value) return null
+  return getMissionLinkingSummary(selectedMission.value)
+})
+
+const aircraftOptionsForDispatch = computed(() => {
+  if (!dispatchForm.auto_filter_aircraft) return aircrafts.value
+  return compatibleAircraftRows.value
+})
+
+function recalcCompatibility() {
+  if (!selectedMission.value) {
+    compatibleAircraftRows.value = []
+    incompatibleAircraftRows.value = []
+    return
+  }
+
+  const okRows = []
+  const badRows = []
+  for (const aircraft of aircrafts.value) {
+    const result = checkRouteAircraftCompatibility({
+      mission: selectedMission.value,
+      aircraft,
+      modelCapabilitiesMap: modelCapabilitiesMap.value
+    })
+    if (result.ok) {
+      okRows.push(aircraft)
+    } else {
+      badRows.push({
+        aircraftId: aircraft.aircraftId,
+        name: aircraft.name,
+        modelCode: aircraft.modelCode,
+        errors: result.errors
+      })
+    }
+  }
+
+  compatibleAircraftRows.value = okRows
+  incompatibleAircraftRows.value = badRows
+
+  if (dispatchForm.auto_filter_aircraft && dispatchForm.aircraftId) {
+    const exists = okRows.some((a) => a.aircraftId === dispatchForm.aircraftId)
+    if (!exists) {
+      dispatchForm.aircraftId = ''
+    }
+  }
+}
 
 async function request(path, options = {}) {
   const resp = await fetch(`${apiBase.value}${path}`, {
@@ -73,6 +138,7 @@ async function loadModels() {
     errorText.value = err.message
   } finally {
     loading.models = false
+    recalcCompatibility()
   }
 }
 
@@ -86,6 +152,7 @@ async function loadAircrafts() {
     errorText.value = err.message
   } finally {
     loading.aircrafts = false
+    recalcCompatibility()
   }
 }
 
@@ -99,6 +166,7 @@ async function loadMissions() {
     errorText.value = err.message
   } finally {
     loading.missions = false
+    recalcCompatibility()
   }
 }
 
@@ -367,6 +435,7 @@ async function dispatchMission() {
       method: 'POST',
       body: JSON.stringify({
         aircraft_id: dispatchForm.aircraftId,
+        route_id: dispatchForm.route_id || dispatchForm.missionId,
         dry_run: dispatchForm.dry_run,
         priority: dispatchForm.priority,
         operator: dispatchForm.operator
@@ -440,8 +509,27 @@ async function applyApiBase() {
   await Promise.all([loadModels(), loadAircrafts(), loadMissions()])
 }
 
+watch(
+  () => [dispatchForm.missionId, dispatchForm.auto_filter_aircraft, aircrafts.value.length, models.value.length],
+  () => {
+    recalcCompatibility()
+  },
+  { deep: false }
+)
+
+watch(
+  () => dispatchForm.missionId,
+  (missionId) => {
+    dispatchForm.route_id = missionId || ''
+    if (dispatchForm.auto_filter_aircraft) {
+      dispatchForm.aircraftId = ''
+    }
+  }
+)
+
 onMounted(async () => {
   await Promise.all([loadModels(), loadAircrafts(), loadMissions()])
+  recalcCompatibility()
 })
 </script>
 
@@ -610,9 +698,13 @@ onMounted(async () => {
                 </a-select>
               </div>
               <div>
+                <div class="field-label">航线标识（route_id）</div>
+                <a-input :value="dispatchForm.route_id" placeholder="默认跟随 missionId" @update:value="dispatchForm.route_id = $event" />
+              </div>
+              <div>
                 <div class="field-label">飞机选择</div>
                 <a-select :value="dispatchForm.aircraftId" class="w-full" placeholder="选择 aircraft" @update:value="dispatchForm.aircraftId = $event">
-                  <a-select-option v-for="a in aircrafts" :key="a.aircraftId" :value="a.aircraftId">{{ a.aircraftId }} · {{ a.name }}</a-select-option>
+                  <a-select-option v-for="a in aircraftOptionsForDispatch" :key="a.aircraftId" :value="a.aircraftId">{{ a.aircraftId }} · {{ a.name }}</a-select-option>
                 </a-select>
               </div>
               <div class="grid md:grid-cols-[120px_1fr] gap-3">
@@ -632,6 +724,11 @@ onMounted(async () => {
               <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
                 <a-checkbox :checked="dispatchForm.dry_run" @update:checked="dispatchForm.dry_run = $event">dry_run，仅做能力校验不下发</a-checkbox>
               </div>
+              <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                <a-checkbox :checked="dispatchForm.auto_filter_aircraft" @update:checked="dispatchForm.auto_filter_aircraft = $event">
+                  自动过滤可执行飞机（联动机型/飞机/能力）
+                </a-checkbox>
+              </div>
             </div>
 
             <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
@@ -643,6 +740,12 @@ onMounted(async () => {
                 <div class="dispatch-meta-row"><span>mission</span><strong>{{ createdDispatch.missionId }}</strong></div>
               </div>
               <a-empty v-else class="mt-6" description="尚未发布任务" />
+
+              <div v-if="missionLinkingSummary" class="mt-4 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] text-blue-800">
+                <div>联动规则：机型 {{ missionLinkingSummary.modelCodes?.join(', ') || '未限制' }}</div>
+                <div>能力项 {{ missionLinkingSummary.requirements?.length || 0 }} 条</div>
+                <div>兼容飞机 {{ compatibleAircraftRows.length }} / {{ aircrafts.length }}</div>
+              </div>
             </div>
           </div>
         </section>
@@ -671,6 +774,14 @@ onMounted(async () => {
               </div>
               <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
                 发布后会自动提取第一条带 correlationId 的 command.sent 事件，便于回放调试。
+              </div>
+              <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-500 max-h-40 overflow-auto">
+                <div class="font-semibold text-gray-700 mb-1">不可执行飞机原因</div>
+                <div v-if="!incompatibleAircraftRows.length">全部飞机可执行或暂无数据</div>
+                <div v-for="row in incompatibleAircraftRows" :key="row.aircraftId" class="mb-1">
+                  <span class="font-medium">{{ row.aircraftId }}</span>
+                  <span> - {{ row.errors.join(' / ') }}</span>
+                </div>
               </div>
             </div>
           </section>

@@ -71,6 +71,7 @@ import {
   getAircraftModelMeta,
   getV2CompatibleWaypointExportMeta
 } from '../../constants/aircraftModels.js';
+import { mergeDerivedRequirements, normalizeRouteLinking } from '../../utils/routeLinking.js';
 import CreateMissionModal from './CreateMissionModal.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
@@ -251,7 +252,16 @@ const usesReferenceWaypointExport = (routeType) => {
 
 const normalizeMissionConfig = (config = {}) => {
   const modelMeta = getAircraftModelMeta(config.aircraftModel);
-  if (!modelMeta) return { ...config, routeType: 'waypoint' };
+  if (!modelMeta) {
+    return {
+      ...config,
+      routeType: 'waypoint',
+      routeLinking: mergeDerivedRequirements({
+        ...config,
+        routeLinking: normalizeRouteLinking(config)
+      })
+    };
+  }
 
   const exportMeta = getV2CompatibleWaypointExportMeta(config.aircraftModel);
 
@@ -259,6 +269,10 @@ const normalizeMissionConfig = (config = {}) => {
     ...config,
     routeType: 'waypoint',
     aircraftSeries: config.aircraftSeries || modelMeta.aircraftSeries,
+    routeLinking: mergeDerivedRequirements({
+      ...config,
+      routeLinking: normalizeRouteLinking(config)
+    }),
     ...exportMeta
   };
 };
@@ -610,6 +624,14 @@ const defaultMissionConfig = {
     bottomHeight: 30,
     topHeight: 75,
     radius: 30
+  },
+  routeLinking: {
+    autoMatch: true,
+    modelCodes: ['m30t'],
+    aircraftIds: [],
+    requirements: [
+      { key: 'supports_gimbal', op: 'eq', value: true }
+    ]
   }
 };
 
