@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { Modal, message } from 'ant-design-vue'
 
 const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090')
 const loading = reactive({
@@ -16,6 +17,8 @@ const missions = ref([])
 const dispatchEvents = ref([])
 const dispatchReplay = ref(null)
 const errorText = ref('')
+const selectedModelCodes = ref([])
+const selectedAircraftIds = ref([])
 
 const modelForm = reactive({
   modelCode: '',
@@ -120,6 +123,160 @@ async function createModel() {
   }
 }
 
+function encodePathSegment(value) {
+  return encodeURIComponent(String(value || ''))
+}
+
+function clearSelections() {
+  selectedModelCodes.value = []
+  selectedAircraftIds.value = []
+}
+
+function toggleModelSelection(modelCode, checked) {
+  if (checked) {
+    if (!selectedModelCodes.value.includes(modelCode)) {
+      selectedModelCodes.value.push(modelCode)
+    }
+    return
+  }
+  selectedModelCodes.value = selectedModelCodes.value.filter((v) => v !== modelCode)
+}
+
+function toggleAircraftSelection(aircraftId, checked) {
+  if (checked) {
+    if (!selectedAircraftIds.value.includes(aircraftId)) {
+      selectedAircraftIds.value.push(aircraftId)
+    }
+    return
+  }
+  selectedAircraftIds.value = selectedAircraftIds.value.filter((v) => v !== aircraftId)
+}
+
+function isAircraftDeleteLocked(item) {
+  return String(item?.status || '').toLowerCase() === 'online'
+}
+
+async function replaceModelReferences(oldModelCode, newModelCode) {
+  const relatedAircrafts = aircrafts.value.filter((a) => a.modelCode === oldModelCode)
+  if (!relatedAircrafts.length) return
+
+  await Promise.all(relatedAircrafts.map((a) => {
+    const payload = {
+      aircraftId: a.aircraftId,
+      name: a.name,
+      modelCode: newModelCode,
+      ipAddr: a.ipAddr,
+      status: a.status
+    }
+    return request(`/aircrafts/${encodePathSegment(a.aircraftId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    })
+  }))
+}
+
+async function deleteModelByCode(modelCode) {
+  await request(`/models/${encodePathSegment(modelCode)}`, { method: 'DELETE' })
+}
+
+async function deleteAircraftById(aircraftId) {
+  await request(`/aircrafts/${encodePathSegment(aircraftId)}`, { method: 'DELETE' })
+}
+
+function askConfirm(title, content) {
+  return new Promise((resolve) => {
+    Modal.confirm({
+      title,
+      content,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
+    })
+  })
+}
+
+async function removeModel(item) {
+  const modelCode = item?.modelCode
+  if (!modelCode) return
+
+  errorText.value = ''
+  try {
+    const relatedAircrafts = aircrafts.value.filter((a) => a.modelCode === modelCode)
+    if (relatedAircrafts.length) {
+      const input = window.prompt(
+        `机型 ${modelCode} 正被 ${relatedAircrafts.length} 架飞机引用。\n请输入替代机型编码后继续删除（取消则终止）：`
+      )
+      if (!input) return
+      const replacementCode = String(input).trim()
+      if (!replacementCode || replacementCode === modelCode) {
+        message.error('替代机型编码无效')
+        return
+      }
+      const replacementExists = models.value.some((m) => m.modelCode === replacementCode)
+      if (!replacementExists) {
+        message.error('替代机型不存在，请先创建')
+        return
+      }
+
+      const confirmed = await askConfirm(
+        '确认替换并删除',
+        `将 ${relatedAircrafts.length} 架飞机从 ${modelCode} 替换为 ${replacementCode}，然后删除机型 ${modelCode}。`
+      )
+      if (!confirmed) return
+
+      await replaceModelReferences(modelCode, replacementCode)
+    } else {
+      const confirmed = await askConfirm('确认删除机型', `删除后不可恢复：${modelCode}`)
+      if (!confirmed) return
+    }
+
+    await deleteModelByCode(modelCode)
+    message.success(`已删除机型 ${modelCode}`)
+    await Promise.all([loadModels(), loadAircrafts()])
+    clearSelections()
+  } catch (err) {
+    errorText.value = err.message
+  }
+}
+
+async function batchRemoveModels() {
+  if (!selectedModelCodes.value.length) {
+    message.warning('请先勾选机型')
+    return
+  }
+
+  const related = selectedModelCodes.value.filter((code) => aircrafts.value.some((a) => a.modelCode === code))
+  if (related.length) {
+    message.error(`以下机型仍被引用，无法批量删除：${related.join(', ')}`)
+    return
+  }
+
+  const confirmed = await askConfirm('确认批量删除机型', `共 ${selectedModelCodes.value.length} 项，删除后不可恢复。`)
+  if (!confirmed) return
+
+  errorText.value = ''
+  let success = 0
+  const failed = []
+  for (const modelCode of selectedModelCodes.value) {
+    try {
+      await deleteModelByCode(modelCode)
+      success += 1
+    } catch (err) {
+      failed.push(`${modelCode}: ${err.message}`)
+    }
+  }
+
+  if (success) {
+    message.success(`机型删除成功 ${success} 项`)
+  }
+  if (failed.length) {
+    errorText.value = failed.join('\n')
+  }
+  await loadModels()
+  clearSelections()
+}
+
 async function createAircraft() {
   errorText.value = ''
   try {
@@ -137,6 +294,69 @@ async function createAircraft() {
   } catch (err) {
     errorText.value = err.message
   }
+}
+
+async function removeAircraft(item) {
+  const aircraftId = item?.aircraftId
+  if (!aircraftId) return
+
+  if (isAircraftDeleteLocked(item)) {
+    message.error('在线飞机禁止删除，请先离线并确认无执行任务')
+    return
+  }
+
+  const confirmed = await askConfirm('确认删除飞机资产', `删除后不可恢复：${aircraftId} (${item.name || '-'})`)
+  if (!confirmed) return
+
+  errorText.value = ''
+  try {
+    await deleteAircraftById(aircraftId)
+    message.success(`已删除飞机 ${aircraftId}`)
+    await loadAircrafts()
+    clearSelections()
+  } catch (err) {
+    errorText.value = err.message
+  }
+}
+
+async function batchRemoveAircrafts() {
+  if (!selectedAircraftIds.value.length) {
+    message.warning('请先勾选飞机')
+    return
+  }
+
+  const lockedIds = selectedAircraftIds.value.filter((id) => {
+    const aircraft = aircrafts.value.find((a) => a.aircraftId === id)
+    return isAircraftDeleteLocked(aircraft)
+  })
+  if (lockedIds.length) {
+    message.error(`存在在线飞机，禁止删除：${lockedIds.join(', ')}`)
+    return
+  }
+
+  const confirmed = await askConfirm('确认批量删除飞机', `共 ${selectedAircraftIds.value.length} 项，删除后不可恢复。`)
+  if (!confirmed) return
+
+  errorText.value = ''
+  let success = 0
+  const failed = []
+  for (const aircraftId of selectedAircraftIds.value) {
+    try {
+      await deleteAircraftById(aircraftId)
+      success += 1
+    } catch (err) {
+      failed.push(`${aircraftId}: ${err.message}`)
+    }
+  }
+
+  if (success) {
+    message.success(`飞机删除成功 ${success} 项`)
+  }
+  if (failed.length) {
+    errorText.value = failed.join('\n')
+  }
+  await loadAircrafts()
+  clearSelections()
 }
 
 async function dispatchMission() {
@@ -242,14 +462,17 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="flex-1 overflow-y-auto p-3 space-y-3 admin-scrollbar">
-        <section class="admin-card">
+      <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3 admin-scrollbar">
+        <section class="admin-card model-section">
           <div class="panel-head">
             <div>
               <div class="panel-title">机型管理</div>
               <div class="panel-subtitle">能力模板维护</div>
             </div>
-            <a-button type="text" size="small" @click="loadModels" :loading="loading.models">刷新</a-button>
+            <div class="flex items-center gap-2">
+              <a-button type="text" size="small" danger @click="batchRemoveModels">批量删除</a-button>
+              <a-button type="text" size="small" @click="loadModels" :loading="loading.models">刷新</a-button>
+            </div>
           </div>
           <div class="space-y-2">
             <a-input :value="modelForm.modelCode" size="small" placeholder="机型编码 modelCode" @update:value="modelForm.modelCode = $event" />
@@ -268,6 +491,11 @@ onMounted(async () => {
             <template #renderItem="{ item }">
               <div class="list-item-card">
                 <div class="flex items-start justify-between gap-3">
+                  <a-checkbox
+                    class="mt-0.5"
+                    :checked="selectedModelCodes.includes(item.modelCode)"
+                    @update:checked="toggleModelSelection(item.modelCode, $event)"
+                  />
                   <div class="min-w-0 flex-1">
                     <div class="text-sm font-medium text-gray-900 truncate">{{ item.modelName }}</div>
                     <div class="text-[11px] text-gray-400 mt-1">{{ item.modelCode }} <span v-if="item.vendor">· {{ item.vendor }}</span></div>
@@ -275,6 +503,9 @@ onMounted(async () => {
                   <a-tag color="processing">{{ Object.keys(item.capabilities || {}).length }} 能力</a-tag>
                 </div>
                 <div class="text-[11px] text-gray-500 mt-2 break-all">{{ JSON.stringify(item.capabilities || {}) }}</div>
+                <div class="mt-2 flex justify-end">
+                  <a-button size="small" danger @click="removeModel(item)">删除</a-button>
+                </div>
               </div>
             </template>
             <template #empty>
@@ -283,13 +514,16 @@ onMounted(async () => {
           </a-list>
         </section>
 
-        <section class="admin-card">
+        <section class="admin-card aircraft-section">
           <div class="panel-head">
             <div>
               <div class="panel-title">飞机资产</div>
               <div class="panel-subtitle">在线状态与机型绑定</div>
             </div>
-            <a-button type="text" size="small" @click="loadAircrafts" :loading="loading.aircrafts">刷新</a-button>
+            <div class="flex items-center gap-2">
+              <a-button type="text" size="small" danger @click="batchRemoveAircrafts">批量删除</a-button>
+              <a-button type="text" size="small" @click="loadAircrafts" :loading="loading.aircrafts">刷新</a-button>
+            </div>
           </div>
           <div class="space-y-2">
             <a-input :value="aircraftForm.aircraftId" size="small" placeholder="飞机 ID aircraftId" @update:value="aircraftForm.aircraftId = $event" />
@@ -309,6 +543,12 @@ onMounted(async () => {
             <template #renderItem="{ item }">
               <div class="list-item-card">
                 <div class="flex items-start justify-between gap-3">
+                  <a-checkbox
+                    class="mt-0.5"
+                    :checked="selectedAircraftIds.includes(item.aircraftId)"
+                    :disabled="isAircraftDeleteLocked(item)"
+                    @update:checked="toggleAircraftSelection(item.aircraftId, $event)"
+                  />
                   <div class="min-w-0 flex-1">
                     <div class="text-sm font-medium text-gray-900 truncate">{{ item.name }}</div>
                     <div class="text-[11px] text-gray-400 mt-1">{{ item.aircraftId }} · {{ item.modelCode }}</div>
@@ -318,6 +558,9 @@ onMounted(async () => {
                   </a-tag>
                 </div>
                 <div class="text-[11px] text-gray-500 mt-2">{{ item.ipAddr || '-' }}</div>
+                <div class="mt-2 flex justify-end">
+                  <a-button size="small" danger :disabled="isAircraftDeleteLocked(item)" @click="removeAircraft(item)">删除</a-button>
+                </div>
               </div>
             </template>
             <template #empty>
@@ -472,6 +715,14 @@ onMounted(async () => {
   overflow: hidden;
   background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.aircraft-section {
+  order: 1;
+}
+
+.model-section {
+  order: 2;
 }
 
 .panel-head,
