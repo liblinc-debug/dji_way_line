@@ -39,6 +39,8 @@ const aircraftForm = reactive({
   status: 'offline'
 })
 
+const editingAircraftId = ref('')
+
 const dispatchForm = reactive({
   missionId: '',
   aircraftModelCode: '',
@@ -58,6 +60,7 @@ const ackForm = reactive({
 const createdDispatch = ref(null)
 const compatibleAircraftRows = ref([])
 const incompatibleAircraftRows = ref([])
+const submittingMode = ref('publish')
 
 const modelCapabilitiesMap = computed(() => {
   const map = {}
@@ -108,9 +111,51 @@ const aircraftOptionsForDispatch = computed(() => {
     ? aircrafts.value.filter((a) => String(a.modelCode || '') === String(dispatchForm.aircraftModelCode))
     : aircrafts.value
   if (!dispatchForm.auto_filter_aircraft) return byModel
-  const allowed = new Set(compatibleAircraftRows.value.map((a) => a.aircraftId))
+  const allowed = new Set(
+    compatibleAircraftRows.value
+      .filter((a) => a.publishOk || a.dryRunOk)
+      .map((a) => a.aircraftId)
+  )
   return byModel.filter((a) => allowed.has(a.aircraftId))
 })
+
+const selectedAircraft = computed(() => (
+  aircrafts.value.find((a) => a.aircraftId === dispatchForm.aircraftId) || null
+))
+
+const isPublishDisabled = computed(() => {
+  if (!dispatchForm.aircraftId) return true
+  const status = String(selectedAircraft.value?.status || '').toLowerCase()
+  return status !== 'online'
+})
+
+const isTestRunDisabled = computed(() => {
+  if (!dispatchForm.dry_run) return true
+  if (!dispatchForm.route_id) return true
+  if (!dispatchForm.aircraftId) return true
+  const status = String(selectedAircraft.value?.status || '').toLowerCase()
+  if (status === 'maintenance') return true
+  return false
+})
+
+function resetAircraftForm() {
+  editingAircraftId.value = ''
+  aircraftForm.aircraftId = ''
+  aircraftForm.name = ''
+  aircraftForm.modelCode = ''
+  aircraftForm.ipAddr = ''
+  aircraftForm.status = 'offline'
+}
+
+function startEditAircraft(item) {
+  if (!item) return
+  editingAircraftId.value = item.aircraftId
+  aircraftForm.aircraftId = item.aircraftId
+  aircraftForm.name = item.name || ''
+  aircraftForm.modelCode = item.modelCode || ''
+  aircraftForm.ipAddr = item.ipAddr || ''
+  aircraftForm.status = item.status || 'offline'
+}
 
 function loadRouteLibraryFromLocal() {
   try {
@@ -138,19 +183,34 @@ function recalcCompatibility() {
   const okRows = []
   const badRows = []
   for (const aircraft of aircrafts.value) {
-    const result = checkRouteAircraftCompatibility({
+    const publishResult = checkRouteAircraftCompatibility({
       mission: routeOrMission,
       aircraft,
       modelCapabilitiesMap: modelCapabilitiesMap.value
     })
-    if (result.ok) {
-      okRows.push(aircraft)
-    } else {
+    const dryRunResult = checkRouteAircraftCompatibility({
+      mission: routeOrMission,
+      aircraft,
+      modelCapabilitiesMap: modelCapabilitiesMap.value,
+      allowOffline: true
+    })
+
+    okRows.push({
+      ...aircraft,
+      publishOk: publishResult.ok,
+      dryRunOk: dryRunResult.ok,
+      publishErrors: publishResult.errors,
+      dryRunErrors: dryRunResult.errors
+    })
+
+    if (!publishResult.ok || !dryRunResult.ok) {
       badRows.push({
         aircraftId: aircraft.aircraftId,
         name: aircraft.name,
         modelCode: aircraft.modelCode,
-        errors: result.errors
+        publishErrors: publishResult.errors,
+        dryRunErrors: dryRunResult.errors,
+        dryRunAllowed: dryRunResult.ok
       })
     }
   }
@@ -159,7 +219,7 @@ function recalcCompatibility() {
   incompatibleAircraftRows.value = badRows
 
   if (dispatchForm.auto_filter_aircraft && dispatchForm.aircraftId) {
-    const exists = okRows.some((a) => a.aircraftId === dispatchForm.aircraftId)
+    const exists = okRows.some((a) => a.aircraftId === dispatchForm.aircraftId && (a.publishOk || a.dryRunOk))
     if (!exists) {
       dispatchForm.aircraftId = ''
     }
@@ -395,13 +455,14 @@ async function batchRemoveModels() {
   clearSelections()
 }
 
-async function createAircraft() {
+async function saveAircraft() {
   errorText.value = ''
   try {
-    await request('/aircrafts', {
-      method: 'POST',
+    const aircraftId = editingAircraftId.value || aircraftForm.aircraftId
+    await request(editingAircraftId.value ? `/aircrafts/${encodePathSegment(editingAircraftId.value)}` : '/aircrafts', {
+      method: editingAircraftId.value ? 'PUT' : 'POST',
       body: JSON.stringify({
-        aircraftId: aircraftForm.aircraftId,
+        aircraftId,
         name: aircraftForm.name,
         modelCode: aircraftForm.modelCode,
         ipAddr: aircraftForm.ipAddr,
@@ -409,6 +470,7 @@ async function createAircraft() {
       })
     })
     await loadAircrafts()
+    resetAircraftForm()
   } catch (err) {
     errorText.value = err.message
   }
@@ -477,7 +539,7 @@ async function batchRemoveAircrafts() {
   clearSelections()
 }
 
-async function dispatchMission() {
+async function submitDispatch({ dryRun }) {
   if (!dispatchForm.route_id) {
     errorText.value = '请先在航线库中选择航线'
     return
@@ -487,6 +549,25 @@ async function dispatchMission() {
     return
   }
 
+  if (!dispatchForm.aircraftId) {
+    errorText.value = '请选择飞机后再执行'
+    return
+  }
+
+  const selected = selectedAircraft.value
+  const status = String(selected?.status || '').toLowerCase()
+  if (!dryRun && String(selected?.status || '').toLowerCase() !== 'online') {
+    errorText.value = '离线飞机禁止正式发布，请使用测试运行'
+    return
+  }
+
+  if (dryRun && status === 'maintenance') {
+    errorText.value = '维护中飞机不能执行测试运行'
+    return
+  }
+
+  submittingMode.value = dryRun ? 'test' : 'publish'
+
   loading.dispatch = true
   errorText.value = ''
   try {
@@ -495,7 +576,7 @@ async function dispatchMission() {
       body: JSON.stringify({
         aircraft_id: dispatchForm.aircraftId,
         route_id: dispatchForm.route_id || dispatchForm.missionId,
-        dry_run: dispatchForm.dry_run,
+        dry_run: dryRun,
         priority: dispatchForm.priority,
         operator: dispatchForm.operator
       })
@@ -507,7 +588,16 @@ async function dispatchMission() {
     errorText.value = err.message
   } finally {
     loading.dispatch = false
+    submittingMode.value = 'publish'
   }
+}
+
+async function dispatchMission() {
+  return submitDispatch({ dryRun: false })
+}
+
+async function testRunMission() {
+  return submitDispatch({ dryRun: true })
 }
 
 async function sendAck() {
@@ -692,14 +782,19 @@ onMounted(async () => {
               <div class="panel-subtitle">在线状态与机型绑定</div>
             </div>
             <div class="flex items-center gap-2">
+              <a-button v-if="editingAircraftId" type="text" size="small" @click="resetAircraftForm">取消编辑</a-button>
               <a-button type="text" size="small" danger @click="batchRemoveAircrafts">批量删除</a-button>
               <a-button type="text" size="small" @click="loadAircrafts" :loading="loading.aircrafts">刷新</a-button>
             </div>
           </div>
           <div class="space-y-2">
-            <a-input :value="aircraftForm.aircraftId" size="small" placeholder="飞机 ID aircraftId" @update:value="aircraftForm.aircraftId = $event" />
+            <a-input :value="aircraftForm.aircraftId" :disabled="!!editingAircraftId" size="small" placeholder="飞机 ID aircraftId" @update:value="aircraftForm.aircraftId = $event" />
             <a-input :value="aircraftForm.name" size="small" placeholder="展示名称" @update:value="aircraftForm.name = $event" />
-            <a-input :value="aircraftForm.modelCode" size="small" placeholder="机型编码 modelCode" @update:value="aircraftForm.modelCode = $event" />
+            <a-select :value="aircraftForm.modelCode" size="small" placeholder="选择机型编码" @update:value="aircraftForm.modelCode = $event">
+              <a-select-option v-for="model in models" :key="model.modelCode" :value="model.modelCode">
+                {{ model.modelCode }} · {{ model.modelName }}
+              </a-select-option>
+            </a-select>
             <div class="grid grid-cols-[1fr_120px] gap-2">
               <a-input :value="aircraftForm.ipAddr" size="small" placeholder="IP 地址 ipAddr" @update:value="aircraftForm.ipAddr = $event" />
               <a-select :value="aircraftForm.status" size="small" @update:value="aircraftForm.status = $event">
@@ -708,7 +803,10 @@ onMounted(async () => {
                 <a-select-option value="maintenance">maintenance</a-select-option>
               </a-select>
             </div>
-            <a-button block type="primary" @click="createAircraft">新增飞机</a-button>
+            <div class="flex gap-2">
+              <a-button block type="primary" @click="saveAircraft">{{ editingAircraftId ? '保存修改' : '新增飞机' }}</a-button>
+              <a-button v-if="editingAircraftId" block @click="resetAircraftForm">重置</a-button>
+            </div>
           </div>
           <a-list class="mt-3" :data-source="aircrafts" :split="false">
             <template #renderItem="{ item }">
@@ -729,7 +827,8 @@ onMounted(async () => {
                   </a-tag>
                 </div>
                 <div class="text-[11px] text-gray-500 mt-2">{{ item.ipAddr || '-' }}</div>
-                <div class="mt-2 flex justify-end">
+                <div class="mt-2 flex justify-end gap-2">
+                  <a-button size="small" @click="startEditAircraft(item)">编辑</a-button>
                   <a-button size="small" danger :disabled="isAircraftDeleteLocked(item)" @click="removeAircraft(item)">删除</a-button>
                 </div>
               </div>
@@ -771,7 +870,12 @@ onMounted(async () => {
             <div class="flex gap-2">
               <a-button size="small" @click="loadRouteLibraryFromLocal">刷新航线库</a-button>
               <a-button size="small" @click="loadMissions" :loading="loading.missions">刷新任务</a-button>
-              <a-button size="small" type="primary" @click="dispatchMission" :loading="loading.dispatch">发布任务</a-button>
+              <a-button size="small" @click="testRunMission" :disabled="isTestRunDisabled" :loading="loading.dispatch && submittingMode === 'test'">
+                测试运行
+              </a-button>
+              <a-button size="small" type="primary" @click="dispatchMission" :disabled="isPublishDisabled" :loading="loading.dispatch && submittingMode === 'publish'">
+                发布任务
+              </a-button>
             </div>
           </div>
 
@@ -802,8 +906,14 @@ onMounted(async () => {
               <div>
                 <div class="field-label">飞机选择</div>
                 <a-select :value="dispatchForm.aircraftId" class="w-full" placeholder="选择 aircraft" @update:value="dispatchForm.aircraftId = $event">
-                  <a-select-option v-for="a in aircraftOptionsForDispatch" :key="a.aircraftId" :value="a.aircraftId">{{ a.aircraftId }} · {{ a.name }}</a-select-option>
+                  <a-select-option v-for="a in aircraftOptionsForDispatch" :key="a.aircraftId" :value="a.aircraftId">
+                    {{ a.aircraftId }} · {{ a.name }} · {{ a.status }}
+                  </a-select-option>
                 </a-select>
+                <div v-if="selectedAircraft" class="mt-2 text-[11px] text-gray-500">
+                  当前选择：{{ selectedAircraft.aircraftId }} / {{ selectedAircraft.modelCode }} / {{ selectedAircraft.status }}
+                  <span v-if="selectedAircraft.status !== 'online'" class="text-amber-600">，离线飞机只能测试运行</span>
+                </div>
               </div>
               <div class="grid md:grid-cols-[120px_1fr] gap-3">
                 <div>
@@ -826,6 +936,10 @@ onMounted(async () => {
                 <a-checkbox :checked="dispatchForm.auto_filter_aircraft" @update:checked="dispatchForm.auto_filter_aircraft = $event">
                   自动过滤可执行飞机（联动机型/飞机/能力）
                 </a-checkbox>
+              </div>
+              <div class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 leading-5">
+                <div>测试运行：允许选择离线飞机，仅做能力校验，不下发任务。</div>
+                <div>正式发布：仅允许在线飞机，离线时按钮自动禁用。</div>
               </div>
             </div>
 
@@ -878,7 +992,8 @@ onMounted(async () => {
                 <div v-if="!incompatibleAircraftRows.length">全部飞机可执行或暂无数据</div>
                 <div v-for="row in incompatibleAircraftRows" :key="row.aircraftId" class="mb-1">
                   <span class="font-medium">{{ row.aircraftId }}</span>
-                  <span> - {{ row.errors.join(' / ') }}</span>
+                  <span v-if="row.dryRunAllowed"> - 测试运行可用，正式发布不可用（{{ row.publishErrors.join(' / ') }}）</span>
+                  <span v-else> - {{ row.publishErrors.join(' / ') }}</span>
                 </div>
               </div>
             </div>

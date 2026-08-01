@@ -68,10 +68,10 @@ const compareReq = (caps, req) => {
   return false
 }
 
-export const checkRouteAircraftCompatibility = ({ mission, aircraft, modelCapabilitiesMap = {} }) => {
+export const checkRouteAircraftCompatibility = ({ mission, aircraft, modelCapabilitiesMap = {}, allowOffline = false }) => {
   const errors = []
   const status = String(aircraft?.status || '').toLowerCase()
-  if (status !== 'online') {
+  if (status !== 'online' && !(allowOffline && status === 'offline')) {
     errors.push(status === 'maintenance' ? '飞机维护中' : '飞机离线')
   }
 
