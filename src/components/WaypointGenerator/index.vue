@@ -79,6 +79,7 @@ import MissionLibrary from './MissionLibrary.vue';
 
 const MISSIONS_STORAGE_KEY = 'missions';
 const UI_STATE_STORAGE_KEY = 'waypoint-generator-ui-state';
+const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090');
 
 const missions = ref([]);
 const currentView = ref('library');
@@ -105,6 +106,97 @@ const postBridgeMessage = (action, payload = {}) => {
     action,
     payload
   }, '*');
+};
+
+const request = async (path, options = {}) => {
+  const response = await fetch(`${apiBase.value}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    let message = responseText || `HTTP ${response.status}`;
+    try {
+      const parsed = responseText ? JSON.parse(responseText) : null;
+      if (parsed?.error) {
+        message = parsed.error;
+      }
+    } catch (error) {
+      // keep original text fallback
+    }
+    throw new Error(message);
+  }
+
+  if (!responseText) return null;
+  try {
+    return JSON.parse(responseText);
+  } catch (error) {
+    return responseText;
+  }
+};
+
+const toBackendTaskRequest = (mission = {}) => {
+  const taskId = String(mission.id || Date.now());
+  const config = mission.config || {};
+  const waypoints = Array.isArray(mission.waypoints) ? mission.waypoints.map((wp = {}, index) => ({
+    index: Number.isFinite(Number(wp.index)) ? Number(wp.index) : index,
+    lat: Number(wp.lat ?? 0),
+    lng: Number(wp.lng ?? 0),
+    alt: Number(wp.height ?? wp.alt ?? 0),
+    speed: Number(wp.speed ?? 0) || undefined
+  })) : [];
+
+  const actions = [];
+  for (let wpIndex = 0; wpIndex < (mission.waypoints || []).length; wpIndex += 1) {
+    const waypoint = mission.waypoints[wpIndex] || {};
+    if (!Array.isArray(waypoint.actions)) continue;
+    waypoint.actions.forEach((action, actionIndex) => {
+      if (!action) return;
+      actions.push({
+        id: String(action.id || `${taskId}-${wpIndex}-${actionIndex}`),
+        domain: action.domain,
+        deviceId: action.deviceId,
+        trigger: String(action.trigger || 'waypoint_reached'),
+        waypointIndex: Number.isFinite(Number(action.waypointIndex)) ? Number(action.waypointIndex) : wpIndex,
+        type: String(action.type || 'unknown'),
+        ttlMs: Number.isFinite(Number(action.ttlMs)) ? Number(action.ttlMs) : undefined,
+        params: action.params || undefined
+      });
+    });
+  }
+
+  return {
+    taskId,
+    uavSn: String(config.aircraftModel || config.aircraftSeries || taskId),
+    route: {
+      coordSystem: 'WGS84',
+      waypoints
+    },
+    actions,
+    policies: {
+      lostLink: String(config.exitOnRCLost || ''),
+      lowBattery: '',
+      geoFence: ''
+    }
+  };
+};
+
+const syncMissionToBackend = async (mission) => {
+  try {
+    await request('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(toBackendTaskRequest(mission))
+    });
+    return true;
+  } catch (error) {
+    console.warn('Failed to sync mission to backend', error);
+    errorText.value = `已保存本地航线，但同步到后端任务失败：${error.message}`;
+    return false;
+  }
 };
 
 const getQueryContext = () => {
@@ -728,7 +820,7 @@ const selectMission = (id) => {
   }
 };
 
-const updateAndSaveMission = (updatedData) => {
+const updateAndSaveMission = async (updatedData) => {
   const index = missions.value.findIndex(m => m.id === editingMission.value.id);
   const finalMission = {
     ...editingMission.value,
@@ -749,6 +841,7 @@ const updateAndSaveMission = (updatedData) => {
   }
 
   saveMissionsToStorage();
+  await syncMissionToBackend(finalMission);
   if (isEmbedded()) {
     postBridgeMessage('save', { mission: finalMission });
     return;

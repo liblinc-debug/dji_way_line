@@ -8,14 +8,12 @@ const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0
 const loading = reactive({
   models: false,
   aircrafts: false,
-  missions: false,
   dispatch: false,
   replay: false
 })
 
 const models = ref([])
 const aircrafts = ref([])
-const missions = ref([])
 const routeLibrary = ref([])
 const dispatchEvents = ref([])
 const dispatchReplay = ref(null)
@@ -42,7 +40,6 @@ const aircraftForm = reactive({
 const editingAircraftId = ref('')
 
 const dispatchForm = reactive({
-  missionId: '',
   aircraftModelCode: '',
   aircraftId: '',
   route_id: '',
@@ -72,7 +69,6 @@ const modelCapabilitiesMap = computed(() => {
   return map
 })
 
-const selectedMission = computed(() => missions.value.find((m) => m.missionId === dispatchForm.missionId) || null)
 const selectedRoute = computed(() => routeLibrary.value.find((r) => String(r.id) === String(dispatchForm.route_id)) || null)
 
 const routeOptionsForDispatch = computed(() => {
@@ -102,7 +98,6 @@ const modelCodesForDispatch = computed(() => {
 
 const missionLinkingSummary = computed(() => {
   if (selectedRoute.value) return getMissionLinkingSummary(selectedRoute.value)
-  if (selectedMission.value) return getMissionLinkingSummary(selectedMission.value)
   return null
 })
 
@@ -173,8 +168,8 @@ function loadRouteLibraryFromLocal() {
 }
 
 function recalcCompatibility() {
-  const routeOrMission = selectedRoute.value || selectedMission.value
-  if (!routeOrMission) {
+  const route = selectedRoute.value
+  if (!route) {
     compatibleAircraftRows.value = []
     incompatibleAircraftRows.value = []
     return
@@ -184,12 +179,12 @@ function recalcCompatibility() {
   const badRows = []
   for (const aircraft of aircrafts.value) {
     const publishResult = checkRouteAircraftCompatibility({
-      mission: routeOrMission,
+      mission: route,
       aircraft,
       modelCapabilitiesMap: modelCapabilitiesMap.value
     })
     const dryRunResult = checkRouteAircraftCompatibility({
-      mission: routeOrMission,
+      mission: route,
       aircraft,
       modelCapabilitiesMap: modelCapabilitiesMap.value,
       allowOffline: true
@@ -262,20 +257,6 @@ async function loadAircrafts() {
     errorText.value = err.message
   } finally {
     loading.aircrafts = false
-    recalcCompatibility()
-  }
-}
-
-async function loadMissions() {
-  loading.missions = true
-  errorText.value = ''
-  try {
-    const data = await request('/missions')
-    missions.value = data.items || []
-  } catch (err) {
-    errorText.value = err.message
-  } finally {
-    loading.missions = false
     recalcCompatibility()
   }
 }
@@ -544,10 +525,6 @@ async function submitDispatch({ dryRun }) {
     errorText.value = '请先在航线库中选择航线'
     return
   }
-  if (!dispatchForm.missionId) {
-    errorText.value = '请选择后端 mission 后再发布'
-    return
-  }
 
   if (!dispatchForm.aircraftId) {
     errorText.value = '请选择飞机后再执行'
@@ -571,11 +548,11 @@ async function submitDispatch({ dryRun }) {
   loading.dispatch = true
   errorText.value = ''
   try {
-    const data = await request(`/missions/${dispatchForm.missionId}/dispatch`, {
+    const data = await request(`/tasks/${dispatchForm.route_id}/dispatch`, {
       method: 'POST',
       body: JSON.stringify({
         aircraft_id: dispatchForm.aircraftId,
-        route_id: dispatchForm.route_id || dispatchForm.missionId,
+        route_id: dispatchForm.route_id,
         dry_run: dryRun,
         priority: dispatchForm.priority,
         operator: dispatchForm.operator
@@ -656,24 +633,15 @@ async function loadReplay() {
 async function applyApiBase() {
   localStorage.setItem('uav_task_api_base', apiBase.value)
   loadRouteLibraryFromLocal()
-  await Promise.all([loadModels(), loadAircrafts(), loadMissions()])
+  await Promise.all([loadModels(), loadAircrafts()])
 }
 
 watch(
-  () => [dispatchForm.missionId, dispatchForm.route_id, dispatchForm.aircraftModelCode, dispatchForm.auto_filter_aircraft, aircrafts.value.length, models.value.length],
+  () => [dispatchForm.route_id, dispatchForm.aircraftModelCode, dispatchForm.auto_filter_aircraft, aircrafts.value.length, models.value.length],
   () => {
     recalcCompatibility()
   },
   { deep: false }
-)
-
-watch(
-  () => dispatchForm.missionId,
-  (missionId) => {
-    if (dispatchForm.auto_filter_aircraft) {
-      dispatchForm.aircraftId = ''
-    }
-  }
 )
 
 watch(
@@ -687,18 +655,9 @@ watch(
   }
 )
 
-watch(
-  () => dispatchForm.route_id,
-  (routeId) => {
-    if (routeId && !dispatchForm.missionId) {
-      dispatchForm.missionId = String(routeId)
-    }
-  }
-)
-
 onMounted(async () => {
   loadRouteLibraryFromLocal()
-  await Promise.all([loadModels(), loadAircrafts(), loadMissions()])
+  await Promise.all([loadModels(), loadAircrafts()])
   if (!dispatchForm.aircraftModelCode && modelCodesForDispatch.value.length > 0) {
     dispatchForm.aircraftModelCode = modelCodesForDispatch.value[0]
   }
@@ -848,9 +807,7 @@ onMounted(async () => {
           <div class="text-lg font-semibold text-gray-800 mt-1">任务发布中心</div>
         </div>
         <div class="flex items-center gap-2 text-xs text-gray-500">
-          <span>missions {{ missions.length }}</span>
-          <span class="w-1 h-1 rounded-full bg-gray-300"></span>
-          <span>routes {{ routeLibrary.length }}</span>
+            <span>任务库 {{ routeLibrary.length }}</span>
           <span class="w-1 h-1 rounded-full bg-gray-300"></span>
           <span>aircrafts {{ aircrafts.length }}</span>
           <span class="w-1 h-1 rounded-full bg-gray-300"></span>
@@ -869,12 +826,11 @@ onMounted(async () => {
             </div>
             <div class="flex gap-2">
               <a-button size="small" @click="loadRouteLibraryFromLocal">刷新航线库</a-button>
-              <a-button size="small" @click="loadMissions" :loading="loading.missions">刷新任务</a-button>
               <a-button size="small" @click="testRunMission" :disabled="isTestRunDisabled" :loading="loading.dispatch && submittingMode === 'test'">
                 测试运行
               </a-button>
               <a-button size="small" type="primary" @click="dispatchMission" :disabled="isPublishDisabled" :loading="loading.dispatch && submittingMode === 'publish'">
-                发布任务
+                发布部署
               </a-button>
             </div>
           </div>
@@ -889,18 +845,12 @@ onMounted(async () => {
                 </a-select>
               </div>
               <div>
-                <div class="field-label">航线选择（来自航线库）</div>
-                <a-select :value="dispatchForm.route_id" class="w-full" placeholder="按所选机型筛选航线"
+                <div class="field-label">航线选择（即任务选择）</div>
+                <a-select :value="dispatchForm.route_id" class="w-full" placeholder="按所选机型筛选任务/航线"
                   @update:value="dispatchForm.route_id = $event">
                   <a-select-option v-for="r in routeOptionsForDispatch" :key="r.id" :value="String(r.id)">
                     {{ r.name || r.id }}
                   </a-select-option>
-                </a-select>
-              </div>
-              <div>
-                <div class="field-label">任务选择（后端 mission）</div>
-                <a-select :value="dispatchForm.missionId" class="w-full" placeholder="选择 mission" @update:value="dispatchForm.missionId = $event">
-                  <a-select-option v-for="m in missions" :key="m.missionId" :value="m.missionId">{{ m.missionId }}</a-select-option>
                 </a-select>
               </div>
               <div>
@@ -939,7 +889,7 @@ onMounted(async () => {
               </div>
               <div class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 leading-5">
                 <div>测试运行：允许选择离线飞机，仅做能力校验，不下发任务。</div>
-                <div>正式发布：仅允许在线飞机，离线时按钮自动禁用。</div>
+                <div>发布部署：仅允许在线飞机，离线时按钮自动禁用。</div>
               </div>
             </div>
 
@@ -949,7 +899,7 @@ onMounted(async () => {
                 <div class="dispatch-meta-row"><span>dispatchId</span><strong>{{ createdDispatch.dispatchId }}</strong></div>
                 <div class="dispatch-meta-row"><span>status</span><a-tag color="processing">{{ createdDispatch.dispatchStatus }}</a-tag></div>
                 <div class="dispatch-meta-row"><span>aircraft</span><strong>{{ createdDispatch.aircraftId }}</strong></div>
-                <div class="dispatch-meta-row"><span>mission</span><strong>{{ createdDispatch.missionId }}</strong></div>
+                <div class="dispatch-meta-row"><span>任务</span><strong>{{ createdDispatch.taskId || createdDispatch.missionId }}</strong></div>
               </div>
               <a-empty v-else class="mt-6" description="尚未发布任务" />
 
