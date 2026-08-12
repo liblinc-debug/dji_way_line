@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdminConsole from './components/AdminConsole.vue'
 import AircraftManagement from './components/AircraftManagement.vue'
 import ModelManagement from './components/ModelManagement.vue'
+import SystemManagement from './components/SystemManagement.vue'
 import WaypointGenerator from './components/WaypointGenerator/index.vue'
 
 const isEmbedded = window.parent && window.parent !== window
@@ -25,6 +26,11 @@ const viewMetaMap = {
     title: '机型管理',
     description: '维护机型档案及可复用的任务能力模板'
   },
+  system: {
+    eyebrow: 'SYSTEM SETTINGS',
+    title: '系统管理',
+    description: '配置平台 API、MQTT 与 Redpanda 连接'
+  },
   planner: {
     eyebrow: 'ROUTE PLANNING',
     title: '航线规划',
@@ -36,7 +42,7 @@ const viewMeta = computed(() => viewMetaMap[currentView.value] || viewMetaMap.pl
 
 function readViewFromUrl() {
   const view = new URLSearchParams(window.location.search).get('view')
-  return ['admin', 'aircraft', 'models'].includes(view) ? view : 'planner'
+  return ['admin', 'aircraft', 'models', 'system'].includes(view) ? view : 'planner'
 }
 
 function switchView(view) {
@@ -132,6 +138,20 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
         </button>
       </nav>
 
+      <div class="nav-section-label system-label">平台设置</div>
+      <nav class="platform-nav" aria-label="系统管理导航">
+        <button :class="['platform-nav-item', { active: currentView === 'system' }]" title="系统管理" @click="switchView('system')">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" stroke="currentColor" stroke-width="1.7"/><path d="m19 13.5 1.5 1.2-1.7 3-1.9-.7a7.5 7.5 0 0 1-2.1 1.2l-.3 2h-3.4l-.4-2a7 7 0 0 1-2-1.2l-1.9.7-1.7-3 1.5-1.2a7 7 0 0 1 0-2.5L5.1 9.8l1.7-3 1.9.7a7 7 0 0 1 2-1.2l.4-2h3.4l.3 2a7.5 7.5 0 0 1 2.1 1.2l1.9-.7 1.7 3L19 11a7 7 0 0 1 0 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-copy">
+            <strong>系统管理</strong>
+            <small>服务连接与中间件配置</small>
+          </span>
+          <span class="nav-arrow">›</span>
+        </button>
+      </nav>
+
       <div class="workflow-card">
         <div class="workflow-title">任务闭环</div>
         <div class="workflow-flow">
@@ -178,6 +198,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
         <AdminConsole v-if="currentView === 'admin'" />
         <AircraftManagement v-else-if="currentView === 'aircraft'" />
         <ModelManagement v-else-if="currentView === 'models'" />
+        <SystemManagement v-else-if="currentView === 'system'" />
         <WaypointGenerator v-else />
       </main>
     </section>
