@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdminConsole from './components/AdminConsole.vue'
 import AircraftManagement from './components/AircraftManagement.vue'
+import HomePage from './components/HomePage.vue'
 import ModelManagement from './components/ModelManagement.vue'
 import SystemManagement from './components/SystemManagement.vue'
 import WaypointGenerator from './components/WaypointGenerator/index.vue'
@@ -11,6 +12,11 @@ const currentView = ref(readViewFromUrl())
 const sidebarCollapsed = ref(localStorage.getItem('uav-platform-sidebar-collapsed') === 'true')
 
 const viewMetaMap = {
+  home: {
+    eyebrow: 'PLATFORM OVERVIEW',
+    title: '平台首页',
+    description: '无人机航点任务规划与执行一体化平台'
+  },
   admin: {
     eyebrow: 'MISSION OPERATIONS',
     title: '任务运营中心',
@@ -42,14 +48,14 @@ const viewMeta = computed(() => viewMetaMap[currentView.value] || viewMetaMap.pl
 
 function readViewFromUrl() {
   const view = new URLSearchParams(window.location.search).get('view')
-  return ['admin', 'aircraft', 'models', 'system'].includes(view) ? view : 'planner'
+  return ['planner', 'admin', 'aircraft', 'models', 'system'].includes(view) ? view : 'home'
 }
 
 function switchView(view) {
   if (view === currentView.value) return
   currentView.value = view
   const url = new URL(window.location.href)
-  if (view === 'planner') {
+  if (view === 'home') {
     url.searchParams.delete('view')
   } else {
     url.searchParams.set('view', view)
@@ -90,6 +96,17 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
 
       <div class="nav-section-label">核心工作台</div>
       <nav class="platform-nav" aria-label="平台主导航">
+        <button :class="['platform-nav-item', { active: currentView === 'home' }]" title="平台首页" @click="switchView('home')">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="m4 10 8-6 8 6v9.5H4V10Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 19.5v-6h6v6" stroke="currentColor" stroke-width="1.7"/></svg>
+          </span>
+          <span class="nav-copy">
+            <strong>平台首页</strong>
+            <small>平台能力与任务流程</small>
+          </span>
+          <span class="nav-arrow">›</span>
+        </button>
+
         <button :class="['platform-nav-item', { active: currentView === 'planner' }]" title="航线规划" @click="switchView('planner')">
           <span class="nav-icon">
             <svg viewBox="0 0 24 24" fill="none"><path d="M4 6.5 9 4l6 2.5L20 4v14l-5 2.5L9 18l-5 2V6.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 4v14m6-11.5v14" stroke="currentColor" stroke-width="1.7"/></svg>
@@ -195,7 +212,8 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
       </header>
 
       <main class="platform-content">
-        <AdminConsole v-if="currentView === 'admin'" />
+        <HomePage v-if="currentView === 'home'" @navigate="switchView" />
+        <AdminConsole v-else-if="currentView === 'admin'" />
         <AircraftManagement v-else-if="currentView === 'aircraft'" />
         <ModelManagement v-else-if="currentView === 'models'" />
         <SystemManagement v-else-if="currentView === 'system'" />
