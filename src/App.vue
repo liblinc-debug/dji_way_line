@@ -1,36 +1,52 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdminConsole from './components/AdminConsole.vue'
+import AircraftManagement from './components/AircraftManagement.vue'
+import ModelManagement from './components/ModelManagement.vue'
 import WaypointGenerator from './components/WaypointGenerator/index.vue'
 
 const isEmbedded = window.parent && window.parent !== window
 const currentView = ref(readViewFromUrl())
 const sidebarCollapsed = ref(localStorage.getItem('uav-platform-sidebar-collapsed') === 'true')
 
-const viewMeta = computed(() => currentView.value === 'admin'
-  ? {
-      eyebrow: 'MISSION OPERATIONS',
-      title: '任务运营中心',
-      description: '管理飞行资产，完成任务校验、发布与状态回放'
-    }
-  : {
-      eyebrow: 'ROUTE PLANNING',
-      title: '航线规划',
-      description: '创建、编辑并导出可执行的无人机航点任务'
-    })
+const viewMetaMap = {
+  admin: {
+    eyebrow: 'MISSION OPERATIONS',
+    title: '任务运营中心',
+    description: '完成任务校验、发布、ACK 追踪与状态回放'
+  },
+  aircraft: {
+    eyebrow: 'AIRCRAFT ASSETS',
+    title: '飞机管理',
+    description: '维护飞机身份、机型绑定、网络地址与运行状态'
+  },
+  models: {
+    eyebrow: 'MODEL PROFILES',
+    title: '机型管理',
+    description: '维护机型档案及可复用的任务能力模板'
+  },
+  planner: {
+    eyebrow: 'ROUTE PLANNING',
+    title: '航线规划',
+    description: '创建、编辑并导出可执行的无人机航点任务'
+  }
+}
+
+const viewMeta = computed(() => viewMetaMap[currentView.value] || viewMetaMap.planner)
 
 function readViewFromUrl() {
-  return new URLSearchParams(window.location.search).get('view') === 'admin' ? 'admin' : 'planner'
+  const view = new URLSearchParams(window.location.search).get('view')
+  return ['admin', 'aircraft', 'models'].includes(view) ? view : 'planner'
 }
 
 function switchView(view) {
   if (view === currentView.value) return
   currentView.value = view
   const url = new URL(window.location.href)
-  if (view === 'admin') {
-    url.searchParams.set('view', 'admin')
-  } else {
+  if (view === 'planner') {
     url.searchParams.delete('view')
+  } else {
+    url.searchParams.set('view', view)
   }
   window.history.pushState({ view }, '', url)
 }
@@ -91,6 +107,31 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
         </button>
       </nav>
 
+      <div class="nav-section-label resource-label">资源管理</div>
+      <nav class="platform-nav" aria-label="资源管理导航">
+        <button :class="['platform-nav-item', { active: currentView === 'aircraft' }]" title="飞机管理" @click="switchView('aircraft')">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="m3.5 13 6-2 2.5-6.5 2.5 6.5 6 2-6 2.2L12 20l-2.5-4.8-6-2.2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8 8 5.5 6.5M16 8l2.5-1.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </span>
+          <span class="nav-copy">
+            <strong>飞机管理</strong>
+            <small>资产、机型与运行状态</small>
+          </span>
+          <span class="nav-arrow">›</span>
+        </button>
+
+        <button :class="['platform-nav-item', { active: currentView === 'models' }]" title="机型管理" @click="switchView('models')">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 20 8v8l-8 4.5L4 16V8l8-4.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m4.5 8.2 7.5 4.3 7.5-4.3M12 12.5v8" stroke="currentColor" stroke-width="1.7"/></svg>
+          </span>
+          <span class="nav-copy">
+            <strong>机型管理</strong>
+            <small>机型档案与能力模板</small>
+          </span>
+          <span class="nav-arrow">›</span>
+        </button>
+      </nav>
+
       <div class="workflow-card">
         <div class="workflow-title">任务闭环</div>
         <div class="workflow-flow">
@@ -135,6 +176,8 @@ onBeforeUnmount(() => window.removeEventListener('popstate', syncViewFromHistory
 
       <main class="platform-content">
         <AdminConsole v-if="currentView === 'admin'" />
+        <AircraftManagement v-else-if="currentView === 'aircraft'" />
+        <ModelManagement v-else-if="currentView === 'models'" />
         <WaypointGenerator v-else />
       </main>
     </section>
