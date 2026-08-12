@@ -666,15 +666,15 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="admin-root flex h-screen w-screen overflow-hidden font-sans bg-[#f3f4f6] text-gray-800">
-    <aside class="h-full w-[360px] shrink-0 border-r border-gray-200 bg-white shadow-lg flex flex-col min-h-0">
-      <div class="p-4 bg-gray-50 border-b border-gray-200">
+  <div class="admin-root flex h-full w-full overflow-hidden font-sans bg-[#edf1f7] text-gray-800">
+    <aside class="h-full w-[330px] shrink-0 border-r border-slate-200 bg-white flex flex-col min-h-0">
+      <div class="p-4 bg-white border-b border-gray-200">
         <div class="flex items-start justify-between gap-3 mb-3">
           <div>
-            <h2 class="m-0 text-base font-medium text-gray-900">任务运营中心</h2>
-            <p class="m-0 mt-1 text-xs text-gray-500">机型、飞机、发布、ACK、状态回放</p>
+            <h2 class="m-0 text-base font-semibold text-gray-900">资源与连接</h2>
+            <p class="m-0 mt-1 text-xs text-gray-500">配置服务端并管理机型与飞机资产</p>
           </div>
-          <a-tag color="blue">M1-M4</a-tag>
+          <a-tag color="blue">ASSETS</a-tag>
         </div>
         <div class="flex gap-2 items-center">
           <a-input :value="apiBase" size="small" placeholder="http://127.0.0.1:8090" @update:value="apiBase = $event" />
@@ -801,10 +801,10 @@ onMounted(async () => {
     </aside>
 
     <main class="flex-1 h-full min-w-0 flex flex-col">
-      <div class="px-5 py-4 border-b border-gray-200 bg-white/85 backdrop-blur-sm flex items-center justify-between gap-4">
+      <div class="px-5 py-3 border-b border-gray-200 bg-white/85 backdrop-blur-sm flex items-center justify-between gap-4">
         <div>
           <div class="text-[10px] font-black uppercase tracking-widest text-gray-400">Dispatch Center</div>
-          <div class="text-lg font-semibold text-gray-800 mt-1">任务发布中心</div>
+          <div class="text-lg font-semibold text-gray-800 mt-1">任务编排与执行</div>
         </div>
         <div class="flex items-center gap-2 text-xs text-gray-500">
             <span>任务库 {{ routeLibrary.length }}</span>
@@ -984,11 +984,11 @@ onMounted(async () => {
 
 .admin-card,
 .editor-shell {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid #dfe5ee;
+  border-radius: 10px;
   overflow: hidden;
   background: #fff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 5px 18px rgba(15, 23, 42, 0.055);
 }
 
 .aircraft-section {
@@ -1003,7 +1003,7 @@ onMounted(async () => {
 .editor-shell-head {
   padding: 12px 14px;
   border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb;
+  background: #f8fafc;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1039,8 +1039,8 @@ onMounted(async () => {
 }
 
 .list-item-card:hover {
-  background: #f3f4f6;
-  border-color: #e5e7eb;
+  background: #f4f7fb;
+  border-color: #d9e3f2;
 }
 
 .dispatch-meta-row {

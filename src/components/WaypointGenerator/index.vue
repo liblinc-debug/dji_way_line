@@ -1,5 +1,5 @@
 <template>
-  <div class="w-screen h-screen overflow-hidden font-sans relative">
+  <div class="w-full h-full overflow-hidden font-sans relative">
     <!-- 统一地图背景层：真正实现单例持久化，消除闪烁 -->
     <div class="absolute inset-0 z-[1] bg-gray-100" :class="mapLayoutClass">
       <MapViewer ref="mapRef" :waypoints="activeMapData.waypoints" :route-type="activeMapData.routeType"
