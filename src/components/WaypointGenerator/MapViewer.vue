@@ -415,6 +415,74 @@
           </vc-entity>
         </template>
 
+        <!-- Route playback camera FOV: 24 mm wide reference (yellow) -->
+        <template v-if="previewReady && previewShowWideFov && routePreviewWideFovData.frustum && routePreviewDronePosition">
+          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewWideFovData.rawPoints" :key="'route-wide-side-' + i">
+            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
+              <vc-graphics-polygon
+                :hierarchy="[routePreviewDronePosition, p, routePreviewWideFovData.rawPoints[(i + 1) % routePreviewWideFovData.rawPoints.length]]"
+                :material="'rgba(255, 255, 0, 0.08)'"
+                :perPositionHeight="true"
+              />
+              <vc-graphics-polyline
+                :positions="[routePreviewDronePosition, p]"
+                :material="'rgba(255, 255, 0, 0.45)'"
+                :width="3.0"
+              />
+            </vc-entity>
+          </template>
+          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
+            <vc-graphics-polyline
+              :positions="routePreviewWideFovData.points"
+              :clampToGround="sceneMode === 2"
+              :material="routePreviewWideFovData.lineAttributes.color.value"
+              :width="4.0"
+            />
+          </vc-entity>
+          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
+            <vc-graphics-polygon
+              :hierarchy="routePreviewWideFovData.points"
+              :material="routePreviewWideFovData.appearance.material.uniforms.color"
+              :perPositionHeight="sceneMode === 3"
+              :heightReference="sceneMode === 2 ? 1 : 0"
+            />
+          </vc-entity>
+        </template>
+
+        <!-- Route playback current zoom FOV (green) -->
+        <template v-if="previewReady && previewShowZoomFov && routePreviewZoomFovData.frustum && routePreviewDronePosition">
+          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewZoomFovData.rawPoints" :key="'route-zoom-side-' + i">
+            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
+              <vc-graphics-polygon
+                :hierarchy="[routePreviewDronePosition, p, routePreviewZoomFovData.rawPoints[(i + 1) % routePreviewZoomFovData.rawPoints.length]]"
+                :material="'rgba(0, 255, 0, 0.15)'"
+                :perPositionHeight="true"
+              />
+              <vc-graphics-polyline
+                :positions="[routePreviewDronePosition, p]"
+                :material="'rgba(0, 255, 0, 0.85)'"
+                :width="1.5"
+              />
+            </vc-entity>
+          </template>
+          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
+            <vc-graphics-polyline
+              :positions="routePreviewZoomFovData.points"
+              :clampToGround="sceneMode === 2"
+              :material="routePreviewZoomFovData.lineAttributes.color.value"
+              :width="2.0"
+            />
+          </vc-entity>
+          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
+            <vc-graphics-polygon
+              :hierarchy="routePreviewZoomFovData.points"
+              :material="routePreviewZoomFovData.appearance.material.uniforms.color"
+              :perPositionHeight="sceneMode === 3"
+              :heightReference="sceneMode === 2 ? 1 : 0"
+            />
+          </vc-entity>
+        </template>
+
         <!-- Waypoint Route Polyline (Hidden in Patrol Mode to avoid color conflict) -->
         <template v-if="!props.isPatrolMode && waypointRouteSegments.length > 0">
           <vc-entity v-for="segment in waypointRouteSegments" :key="'waypoint-route-' + segment.key">
@@ -538,6 +606,26 @@
         <div v-else class="mt-2 rounded bg-emerald-400/10 px-2 py-1.5 text-[11px] text-emerald-100">
           {{ previewAltitudeModeLabel }}：模拟飞行高度与规划高度一致。
         </div>
+        <div class="mt-2 rounded border border-white/10 bg-black/20 px-2 py-2 text-[10px] text-gray-200">
+          <div class="mb-1.5 text-gray-400">视场显示（默认关闭）</div>
+          <div class="flex items-center justify-between gap-3">
+            <label class="flex cursor-pointer items-center gap-1.5">
+              <input v-model="previewShowWideFov" type="checkbox" class="h-3.5 w-3.5 accent-yellow-400" />
+              <i class="h-2.5 w-2.5 rounded-sm border border-yellow-200 bg-yellow-400/40"></i>
+              <span>黄色：广角基准 24 mm</span>
+            </label>
+            <span class="font-mono text-yellow-100">固定最大取景范围</span>
+          </div>
+          <div class="mt-1 flex items-center justify-between gap-3">
+            <label class="flex cursor-pointer items-center gap-1.5">
+              <input v-model="previewShowZoomFov" type="checkbox" class="h-3.5 w-3.5 accent-green-400" />
+              <i class="h-2.5 w-2.5 rounded-sm border border-green-200 bg-green-400/40"></i>
+              <span>绿色：当前变焦视场</span>
+            </label>
+            <span class="font-mono text-green-100">{{ previewZoomFactor.toFixed(1) }}× / {{ previewFocalLength.toFixed(1) }} mm</span>
+          </div>
+          <div class="mt-1 text-gray-400">两者共享飞机航向与云台俯仰（当前 {{ previewGimbalPitch.toFixed(1) }}°）；1× 变焦时两区域重合。</div>
+        </div>
 
         <input
           class="mt-3 w-full accent-blue-500"
@@ -635,6 +723,8 @@ let previewRouteEntity = null;
 let previewDroneEntity = null;
 let previewHeadingEntity = null;
 let previewPath = [];
+let previewCameraStates = [];
+let previewSurfaceHeights = [];
 let previewCumulativeDistances = [];
 let previewDistance = 0;
 let previewRafId = 0;
@@ -645,17 +735,25 @@ let previewVisualHeading = 0;
 let previewScreenRotation = 0;
 let previewDroneIcons = null;
 let previewIconSceneMode = null;
+let previewLastFovUpdateAt = 0;
 
 const wideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const zoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const virtualWideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const virtualZoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
+const routePreviewWideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
+const routePreviewZoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 
 const fovDronePosition = ref(null);
 const virtualDronePosition = ref(null);
 const virtualDroneYawRad = ref(0);
 const virtualDroneColor = ref('#00aaff');
 const virtualDroneVisible = ref(false);
+const routePreviewDronePosition = ref(null);
+const previewGimbalPitch = ref(-45);
+const previewZoomFactor = ref(1);
+const previewShowWideFov = ref(false);
+const previewShowZoomFov = ref(false);
 const fovPreviewMode = ref('idle');
 const pendingFovState = ref(null);
 const pendingVirtualFlightState = ref(null);
@@ -712,6 +810,7 @@ const previewAltitudeModeLabel = computed(() => (
     ? '实时仿地高度'
     : (props.executeHeightMode === 'WGS84' ? 'WGS84 绝对高度' : '相对起飞点高度')
 ));
+const previewFocalLength = computed(() => 24 * previewZoomFactor.value);
 
 // --- 3. Computed Properties ---
 // 使用 Props 中的 isPatrolMode 避免冲突
@@ -1525,6 +1624,12 @@ const removePreviewEntities = () => {
   previewVisualHeading = 0;
   previewScreenRotation = 0;
   previewIconSceneMode = null;
+  previewLastFovUpdateAt = 0;
+  routePreviewDronePosition.value = null;
+  routePreviewWideFovData.value = { points: [], rawPoints: [] };
+  routePreviewZoomFovData.value = { points: [], rawPoints: [] };
+  previewGimbalPitch.value = -45;
+  previewZoomFactor.value = 1;
 };
 
 const invalidateRoutePreview = () => {
@@ -1532,6 +1637,8 @@ const invalidateRoutePreview = () => {
   unlockPreviewCamera();
   removePreviewEntities();
   previewPath = [];
+  previewCameraStates = [];
+  previewSurfaceHeights = [];
   previewCumulativeDistances = [];
   previewDistance = 0;
   previewTotalDistance.value = 0;
@@ -1551,14 +1658,50 @@ const interpolateNumber = (start, end, fraction, fallback = 0) => {
   return safeStart + (safeEnd - safeStart) * fraction;
 };
 
+const normalizeHeadingDegrees = (degrees) => ((Number(degrees) % 360) + 360) % 360;
+
+const interpolateHeadingDegrees = (start, end, fraction) => {
+  const normalizedStart = normalizeHeadingDegrees(start);
+  const normalizedEnd = normalizeHeadingDegrees(end);
+  const shortestDelta = ((normalizedEnd - normalizedStart + 540) % 360) - 180;
+  return normalizeHeadingDegrees(normalizedStart + shortestDelta * fraction);
+};
+
+const getWaypointActionNumber = (waypoint, type, parameter) => {
+  const action = waypoint?.actions?.find((item) => item?.type === type);
+  const value = Number(action?.params?.[parameter]);
+  return Number.isFinite(value) ? value : null;
+};
+
+const resolveWaypointCameraStates = (waypoints) => {
+  const activeState = { pitch: -45, zoomFactor: 1, yaw: null };
+  return waypoints.map((waypoint) => {
+    const pitch = getWaypointActionNumber(waypoint, ACTION_TYPE.GIMBAL_PITCH, 'gimbalPitchRotateAngle');
+    const zoomFactor = getWaypointActionNumber(waypoint, ACTION_TYPE.ZOOM, 'zoomFactor');
+    const yaw = getWaypointActionNumber(waypoint, ACTION_TYPE.AIRCRAFT_YAW, 'aircraftYawAngle');
+    if (pitch != null) activeState.pitch = Math.max(-90, Math.min(70, pitch));
+    if (zoomFactor != null) activeState.zoomFactor = Math.max(1, Math.min(112, zoomFactor));
+    if (yaw != null) activeState.yaw = normalizeHeadingDegrees(yaw);
+    return { ...activeState };
+  });
+};
+
 const buildResamplePlan = (Cesium) => {
   const waypoints = props.waypoints.filter((point) => point?.lng != null && point?.lat != null);
   const samples = [];
+  const waypointCameraStates = resolveWaypointCameraStates(waypoints);
+  let finalRouteHeading = 0;
 
   for (let index = 0; index < waypoints.length - 1; index += 1) {
     const start = Cesium.Cartographic.fromDegrees(Number(waypoints[index].lng), Number(waypoints[index].lat));
     const end = Cesium.Cartographic.fromDegrees(Number(waypoints[index + 1].lng), Number(waypoints[index + 1].lat));
     const geodesic = new Cesium.EllipsoidGeodesic(start, end);
+    const routeHeading = normalizeHeadingDegrees(Cesium.Math.toDegrees(geodesic.startHeading));
+    finalRouteHeading = routeHeading;
+    const startCamera = waypointCameraStates[index];
+    const endCamera = waypointCameraStates[index + 1];
+    const startYaw = startCamera.yaw ?? routeHeading;
+    const endYaw = endCamera.yaw ?? routeHeading;
     const steps = Math.max(1, Math.ceil(geodesic.surfaceDistance / ROUTE_SAMPLE_SPACING_METERS));
     for (let step = 0; step < steps; step += 1) {
       const fraction = step / steps;
@@ -1574,16 +1717,27 @@ const buildResamplePlan = (Cesium) => {
           waypoints[index + 1].height,
           fraction,
           ROUTE_CLEARANCE_METERS
-        )
+        ),
+        cameraState: {
+          pitch: interpolateNumber(startCamera.pitch, endCamera.pitch, fraction, -45),
+          zoomFactor: interpolateNumber(startCamera.zoomFactor, endCamera.zoomFactor, fraction, 1),
+          yaw: interpolateHeadingDegrees(startYaw, endYaw, fraction)
+        }
       });
     }
   }
 
   const last = waypoints[waypoints.length - 1];
+  const lastCamera = waypointCameraStates[waypointCameraStates.length - 1];
   samples.push({
     cartographic: Cesium.Cartographic.fromDegrees(Number(last.lng), Number(last.lat)),
     plannedAbsoluteAltitude: resolveDisplayAltitude(last),
-    plannedSurfaceOffset: Number.isFinite(Number(last.height)) ? Number(last.height) : ROUTE_CLEARANCE_METERS
+    plannedSurfaceOffset: Number.isFinite(Number(last.height)) ? Number(last.height) : ROUTE_CLEARANCE_METERS,
+    cameraState: {
+      pitch: lastCamera.pitch,
+      zoomFactor: lastCamera.zoomFactor,
+      yaw: normalizeHeadingDegrees(lastCamera.yaw ?? finalRouteHeading)
+    }
   });
   return samples;
 };
@@ -1643,10 +1797,12 @@ const prepareRoutePreview = async () => {
 
     let adjustedCount = 0;
     let maxAdjustment = 0;
+    const sampledSurfaceHeights = [];
     previewPath = sampled.map((point, index) => {
       const sampledHeight = Number.isFinite(point.height)
         ? point.height
         : (viewer.scene.globe.getHeight(point) || 0);
+      sampledSurfaceHeights.push(sampledHeight);
       const plan = resamplePlan[index];
       const plannedAltitude = props.executeHeightMode === 'realTimeFollowSurface'
         ? sampledHeight + Number(plan?.plannedSurfaceOffset || 0)
@@ -1665,6 +1821,8 @@ const prepareRoutePreview = async () => {
         previewAltitude
       ));
     });
+    previewCameraStates = resamplePlan.map((sample) => sample.cameraState);
+    previewSurfaceHeights = sampledSurfaceHeights;
     previewAltitudeAdjustedCount.value = adjustedCount;
     previewMaxAltitudeAdjustment.value = maxAdjustment;
 
@@ -1761,6 +1919,61 @@ const getPreviewHeading = (position, nextPosition, Cesium) => {
   return Math.atan2(localNext.x, localNext.y);
 };
 
+const getPreviewCameraState = (segmentIndex, fraction) => {
+  const start = previewCameraStates[segmentIndex] || { pitch: -45, zoomFactor: 1, yaw: 0 };
+  const end = previewCameraStates[segmentIndex + 1] || start;
+  return {
+    pitch: interpolateNumber(start.pitch, end.pitch, fraction, -45),
+    zoomFactor: interpolateNumber(start.zoomFactor, end.zoomFactor, fraction, 1),
+    yaw: interpolateHeadingDegrees(start.yaw, end.yaw, fraction)
+  };
+};
+
+const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = false) => {
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium || !position || !cameraState) return;
+
+  routePreviewDronePosition.value = markRaw(Cesium.Cartesian3.clone(position, new Cesium.Cartesian3()));
+  previewGimbalPitch.value = cameraState.pitch;
+  previewZoomFactor.value = cameraState.zoomFactor;
+
+  const updateTime = Date.now();
+  const shouldRebuild = force
+    || !previewPlaying.value
+    || previewLastFovUpdateAt === 0
+    || updateTime - previewLastFovUpdateAt >= 80;
+  if (!shouldRebuild) return;
+
+  const cartographic = Cesium.Cartographic.fromCartesian(position);
+  if (!cartographic) return;
+  const absoluteAltitude = Number(cartographic.height) || 0;
+  const resolvedSurfaceHeight = Number.isFinite(Number(surfaceHeight)) ? Number(surfaceHeight) : 0;
+  const dronePos = {
+    lng: Cesium.Math.toDegrees(cartographic.longitude),
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    alt: absoluteAltitude,
+    executeHeightMode: 'WGS84'
+  };
+  const gimbalAtt = {
+    yaw: normalizeHeadingDegrees(cameraState.yaw),
+    pitch: cameraState.pitch
+  };
+  const zoomFocalLength = 24 * cameraState.zoomFactor;
+
+  routePreviewWideFovData.value = {
+    ...buildFrustumData(dronePos, gimbalAtt, 24, 'yellow', absoluteAltitude, resolvedSurfaceHeight, Cesium),
+    altitude: absoluteAltitude,
+    absAltitude: absoluteAltitude
+  };
+  routePreviewZoomFovData.value = {
+    ...buildFrustumData(dronePos, gimbalAtt, zoomFocalLength, 'lime', absoluteAltitude, resolvedSurfaceHeight, Cesium),
+    altitude: absoluteAltitude,
+    absAltitude: absoluteAltitude
+  };
+  previewLastFovUpdateAt = updateTime;
+};
+
 const updatePreviewScreenRotation = (viewer, Cesium) => {
   if (!previewVisualPosition || !previewHeadingTip) return;
   const start = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, previewVisualPosition);
@@ -1786,25 +1999,25 @@ const updatePreviewBillboardForScene = (viewer, Cesium) => {
   previewIconSceneMode = currentMode;
 };
 
-const followPreviewCamera = (position, nextPosition) => {
+const followPreviewCamera = (position, nextPosition, cameraState) => {
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
   if (!viewer || !Cesium) return;
-  let heading = getPreviewHeading(position, nextPosition, Cesium);
-  const direction = Cesium.Cartesian3.subtract(nextPosition, position, new Cesium.Cartesian3());
-  const hasDirection = Cesium.Cartesian3.magnitudeSquared(direction) > 0.0001;
+  const routeHeading = getPreviewHeading(position, nextPosition, Cesium);
+  const heading = Number.isFinite(Number(cameraState?.yaw))
+    ? Cesium.Math.toRadians(normalizeHeadingDegrees(cameraState.yaw))
+    : routeHeading;
   previewVisualPosition = position;
-  if (hasDirection) {
-    Cesium.Cartesian3.normalize(direction, direction);
-    previewHeadingTip = Cesium.Cartesian3.add(
-      position,
-      Cesium.Cartesian3.multiplyByScalar(direction, 35, new Cesium.Cartesian3()),
-      new Cesium.Cartesian3()
-    );
-    previewVisualHeading = heading;
-  } else {
-    heading = previewVisualHeading;
-  }
+  const localDirection = new Cesium.Cartesian3(Math.sin(heading), Math.cos(heading), 0);
+  const localFrame = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+  const worldDirection = Cesium.Matrix4.multiplyByPointAsVector(localFrame, localDirection, new Cesium.Cartesian3());
+  Cesium.Cartesian3.normalize(worldDirection, worldDirection);
+  previewHeadingTip = Cesium.Cartesian3.add(
+    position,
+    Cesium.Cartesian3.multiplyByScalar(worldDirection, 35, new Cesium.Cartesian3()),
+    new Cesium.Cartesian3()
+  );
+  previewVisualHeading = heading;
 
   const is2D = viewer.scene.mode === Cesium.SceneMode.SCENE2D;
   updatePreviewBillboardForScene(viewer, Cesium);
@@ -1867,8 +2080,21 @@ const updateRoutePreviewPosition = (distance) => {
     fraction,
     new Cesium.Cartesian3()
   );
+  const cameraState = getPreviewCameraState(segmentIndex, fraction);
+  const surfaceHeight = interpolateNumber(
+    previewSurfaceHeights[segmentIndex],
+    previewSurfaceHeights[segmentIndex + 1],
+    fraction,
+    0
+  );
   previewProgress.value = total > 0 ? (previewDistance / total) * 100 : 0;
-  followPreviewCamera(position, previewPath[segmentIndex + 1]);
+  followPreviewCamera(position, previewPath[segmentIndex + 1], cameraState);
+  updateRoutePreviewFov(
+    position,
+    cameraState,
+    surfaceHeight,
+    previewDistance <= 0 || previewDistance >= total
+  );
   viewerInstance.value?.scene?.requestRender?.();
 };
 
@@ -2183,13 +2409,17 @@ const buildFrustumData = (dronePos, gimbalAtt, focalLength, color, absAlt, groun
   const modelMatrix = markRaw(Cesium.Transforms.eastNorthUpToFixedFrame(
     Cesium.Cartesian3.fromDegrees(dronePos.lng, dronePos.lat, absAlt)
   ));
-  const raw = calculateFOVProjection(dronePos, gimbalAtt, specs);
-  const cartesianGroundPoints = raw.map(p => Cesium.Cartesian3.fromDegrees(
+  const absoluteDronePos = { ...dronePos, alt: absAlt };
+  const projectionPoints = calculateFOVProjection(absoluteDronePos, gimbalAtt, specs, groundHeight);
+  const sideProjectionPoints = projectionPoints.length > 1
+    ? projectionPoints.slice(0, -1)
+    : projectionPoints;
+  const cartesianGroundPoints = projectionPoints.map(p => Cesium.Cartesian3.fromDegrees(
     p.lng,
     p.lat,
     (viewerInstance.value.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(p.lng, p.lat)) || groundHeight) + 0.5
   ));
-  const cartesianSidePoints = raw.map(p => {
+  const cartesianSidePoints = sideProjectionPoints.map(p => {
     const localH = viewerInstance.value.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(p.lng, p.lat)) || groundHeight;
     return Cesium.Cartesian3.fromDegrees(p.lng, p.lat, localH + 0.5);
   });
@@ -2237,7 +2467,7 @@ const updateFov = async (dronePos, gimbalAtt, focalLength, previewMode = 'waypoi
   virtualDronePosition.value = markRaw(Cesium.Cartesian3.fromDegrees(dronePos.lng, dronePos.lat, absAlt));
   virtualDroneYawRad.value = -((gimbalAtt?.yaw || 0) * Math.PI) / 180;
   virtualDroneColor.value = fovPreviewMode.value === 'virtual' ? '#00aaff' : '#00f2ff';
-  centerPointRaw.value = calculateCenterPoint(dronePos, gimbalAtt, 0);
+  centerPointRaw.value = calculateCenterPoint({ ...dronePos, alt: absAlt }, gimbalAtt, groundHeight);
   viewer.scene.requestRender();
 };
 
@@ -2358,8 +2588,20 @@ watch(() => props.waypoints?.length, (newLen, oldLen) => {
 
 watch(
   () => props.waypoints
-    .map((point) => `${Number(point?.lng || 0).toFixed(8)},${Number(point?.lat || 0).toFixed(8)},${Number(point?.height || 0).toFixed(2)}`)
-    .join('|'),
+    .map((point) => {
+      const pitch = getWaypointActionNumber(point, ACTION_TYPE.GIMBAL_PITCH, 'gimbalPitchRotateAngle');
+      const yaw = getWaypointActionNumber(point, ACTION_TYPE.AIRCRAFT_YAW, 'aircraftYawAngle');
+      const zoom = getWaypointActionNumber(point, ACTION_TYPE.ZOOM, 'zoomFactor');
+      return [
+        Number(point?.lng || 0).toFixed(8),
+        Number(point?.lat || 0).toFixed(8),
+        Number(point?.height || 0).toFixed(2),
+        pitch ?? '',
+        yaw ?? '',
+        zoom ?? ''
+      ].join(',');
+    })
+    .join('|') + `|${props.executeHeightMode}|${Number(props.takeoffPoint?.asl || props.takeoffPoint?.height || 0).toFixed(2)}`,
   (signature, previousSignature) => {
     if (previousSignature !== undefined && signature !== previousSignature && previewReady.value) {
       invalidateRoutePreview();
