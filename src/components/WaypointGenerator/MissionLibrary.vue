@@ -27,9 +27,28 @@
           <div
             class="bg-gray-50 rounded p-3 mb-2 cursor-pointer border border-transparent transition-all hover:bg-gray-100 group relative"
             @click="$emit('select', item.id)">
-            <div class="flex justify-between items-start gap-2 mb-2 pr-14">
-              <span class="text-sm font-medium text-gray-900 truncate min-w-0 flex-1">{{ item.name }}</span>
-              <div class="flex gap-1 flex-none">
+            <div class="flex justify-between items-start gap-2 mb-2">
+              <div v-if="editingMissionId === item.id" class="flex min-w-0 flex-1 items-center gap-1" @click.stop>
+                <a-input
+                  v-model:value="draftMissionName"
+                  size="small"
+                  class="min-w-0 flex-1"
+                  :maxlength="80"
+                  autofocus
+                  @press-enter="confirmRename(item.id)"
+                  @keydown.esc="cancelRename"
+                />
+                <a-button type="text" size="small" class="!h-7 !px-1 text-green-600" title="保存名称"
+                  :disabled="!draftMissionName.trim()" @click.stop="confirmRename(item.id)">✅</a-button>
+                <a-button type="text" size="small" class="!h-7 !px-1 text-gray-500" title="取消编辑"
+                  @click.stop="cancelRename">✕</a-button>
+              </div>
+              <div v-else class="flex min-w-0 flex-1 items-center gap-1">
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-900">{{ item.name }}</span>
+                <a-button type="text" size="small" class="!h-6 !px-1 opacity-70 hover:opacity-100"
+                  title="编辑航线名称" @click.stop="startRename(item)">✏️</a-button>
+              </div>
+              <div v-if="editingMissionId !== item.id" class="flex gap-1 flex-none">
                 <a-button type="text" size="small" class="!px-1 !h-6" @click.stop="$emit('download', item.id)">
                   <span class="text-xs">下载</span>
                 </a-button>
@@ -88,10 +107,29 @@ const props = defineProps({
   }
 });
 
-defineEmits(['create', 'select', 'edit', 'delete', 'download']);
+const emit = defineEmits(['create', 'select', 'edit', 'delete', 'download', 'rename']);
 
 const activeModelFilter = ref('all');
 const sortOrder = ref('desc');
+const editingMissionId = ref(null);
+const draftMissionName = ref('');
+
+const startRename = (mission) => {
+  editingMissionId.value = mission.id;
+  draftMissionName.value = String(mission.name || '');
+};
+
+const cancelRename = () => {
+  editingMissionId.value = null;
+  draftMissionName.value = '';
+};
+
+const confirmRename = (id) => {
+  const name = draftMissionName.value.trim();
+  if (!name) return;
+  emit('rename', { id, name });
+  cancelRename();
+};
 
 const modelFilterOptions = computed(() => {
   const set = new Set();

@@ -6,7 +6,7 @@
       class="absolute inset-0">
       <vc-navigation></vc-navigation>
       <vc-compass-sm :auto-hidden="false" position="bottom" :offset="[200, 20]"></vc-compass-sm>
-      <!-- <vc-zoom-control-sm position="bottom" :offset="[0, 50]"></vc-zoom-control-sm> -->
+      <vc-zoom-control-sm position="bottom" :offset="[380, 60]"></vc-zoom-control-sm>
 
       <template v-if="cesiumInstance">
         <!-- Enhanced 3D Waypoints with Measurement HUD (只用于航点模式) -->
@@ -474,6 +474,100 @@
         {{ group.label }}
       </button>
     </div>
+
+    <div
+      class="absolute top-4 z-30 flex items-center gap-2 rounded-lg border border-white/25 bg-black/60 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-md pointer-events-auto"
+      :style="mapControlStyle"
+      @click.stop
+    >
+      <span class="font-semibold">地图</span>
+      <select
+        v-model="mapMode"
+        class="rounded border border-white/20 bg-black/50 px-2 py-1 text-xs text-white outline-none"
+        :disabled="mapLoading"
+        @change="applyMapMode"
+      >
+        <option value="standard">标准地图</option>
+        <option value="buildings">ArcGIS 影像 + 3D 白模</option>
+      </select>
+      <span v-if="mapLoading" class="text-amber-300">加载中…</span>
+      <span v-else-if="mapStatus" class="max-w-52 truncate text-gray-300" :title="mapStatus">{{ mapStatus }}</span>
+    </div>
+
+    <div
+      v-if="canPreviewRoute"
+      class="absolute top-16 z-30 w-[360px] rounded-xl border border-white/20 bg-black/70 p-3 text-white shadow-2xl backdrop-blur-md pointer-events-auto"
+      :style="mapControlStyle"
+      @click.stop
+    >
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <div class="text-sm font-bold">航线贴楼飞行预览</div>
+          <div class="mt-0.5 text-[10px] text-gray-400">固定间距重采样建筑表面，预览数据不会修改导出航点</div>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded bg-blue-500 px-3 py-1.5 text-xs font-semibold hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="previewPreparing || mapMode !== 'buildings'"
+          @click="prepareRoutePreview"
+        >
+          {{ previewPreparing ? '采样中…' : (previewReady ? '重新采样' : '生成预览') }}
+        </button>
+      </div>
+
+      <div v-if="mapMode !== 'buildings' && !previewReady" class="mt-2 rounded bg-amber-400/10 px-2 py-1.5 text-[11px] text-amber-200">
+        请先选择“ArcGIS 影像 + 3D 白模”。
+      </div>
+      <div v-else-if="previewError" class="mt-2 rounded bg-red-500/10 px-2 py-1.5 text-[11px] text-red-200">
+        {{ previewError }}
+      </div>
+      <div v-else-if="previewReady && sceneMode === 2" class="mt-2 rounded bg-blue-400/10 px-2 py-1.5 text-[11px] text-blue-100">
+        当前为 2D 俯视预览；切换到 3D 后将使用透视无人机图标。
+      </div>
+
+      <template v-if="previewReady">
+        <div class="mt-3 grid grid-cols-4 gap-2 text-center">
+          <div class="rounded bg-white/5 px-1 py-1.5"><div class="text-[9px] text-gray-400">航点</div><div class="font-mono text-xs">{{ previewStats.waypointCount }}</div></div>
+          <div class="rounded bg-white/5 px-1 py-1.5"><div class="text-[9px] text-gray-400">长度</div><div class="font-mono text-xs">{{ previewStats.distanceLabel }}</div></div>
+          <div class="rounded bg-white/5 px-1 py-1.5"><div class="text-[9px] text-gray-400">时长</div><div class="font-mono text-xs">{{ previewStats.durationLabel }}</div></div>
+          <div class="rounded bg-white/5 px-1 py-1.5"><div class="text-[9px] text-gray-400">速度</div><div class="font-mono text-xs">{{ previewSpeed }}m/s</div></div>
+        </div>
+        <div v-if="previewAltitudeAdjustedCount > 0" class="mt-2 rounded bg-amber-400/10 px-2 py-1.5 text-[11px] text-amber-100">
+          {{ previewAltitudeModeLabel }}：检测到 {{ previewAltitudeAdjustedCount }} 个采样点低于建筑安全高度，最大自动抬升 {{ previewMaxAltitudeAdjustment.toFixed(1) }}m。
+        </div>
+        <div v-else class="mt-2 rounded bg-emerald-400/10 px-2 py-1.5 text-[11px] text-emerald-100">
+          {{ previewAltitudeModeLabel }}：模拟飞行高度与规划高度一致。
+        </div>
+
+        <input
+          class="mt-3 w-full accent-blue-500"
+          type="range"
+          min="0"
+          max="100"
+          step="0.1"
+          :value="previewProgress"
+          @input="seekRoutePreview($event.target.value)"
+        />
+
+        <div class="mt-2 flex items-center gap-2">
+          <button type="button" class="rounded bg-emerald-500 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-400" @click="toggleRoutePreview">
+            {{ previewPlaying ? '暂停' : (previewFinished ? '回放' : '播放') }}
+          </button>
+          <button type="button" class="rounded bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20" @click="resetRoutePreview">回到起点</button>
+          <select v-model.number="previewSpeed" class="rounded border border-white/20 bg-black/50 px-2 py-1.5 text-xs text-white outline-none">
+            <option :value="2">2 m/s</option>
+            <option :value="5">5 m/s</option>
+            <option :value="10">10 m/s</option>
+            <option :value="15">15 m/s</option>
+            <option :value="20">20 m/s</option>
+          </select>
+          <select v-model="previewViewMode" class="ml-auto rounded border border-white/20 bg-black/50 px-2 py-1.5 text-xs text-white outline-none">
+            <option value="first">第一人称</option>
+            <option value="third">第三人称</option>
+          </select>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
 
@@ -481,6 +575,7 @@
 import { computed, markRaw, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ACTION_TYPE } from '../../types/waypointRoute.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
+import { createDronePreviewIcons } from '../../utils/dronePreviewIcon.js';
 import { PLANE_SVG } from './constants';
 
 // --- 1. Props & Emits ---
@@ -519,6 +614,37 @@ const camera = ref(props.waypoints?.length > 0 && props.waypoints[0]?.lng != nul
   : { position: { lng: 104.39, lat: 31.09, height: 1000000 }, heading: 0, pitch: -90, roll: 0 }
 );
 const hasAutoLocated = ref(false);
+const mapMode = ref('standard');
+const mapLoading = ref(false);
+const mapStatus = ref('ArcGIS 影像 · WGS84 · Cesium 地形');
+const previewPreparing = ref(false);
+const previewError = ref('');
+const previewPathVersion = ref(0);
+const previewPlaying = ref(false);
+const previewFinished = ref(false);
+const previewProgress = ref(0);
+const previewSpeed = ref(10);
+const previewViewMode = ref('third');
+const previewTotalDistance = ref(0);
+const previewAltitudeAdjustedCount = ref(0);
+const previewMaxAltitudeAdjustment = ref(0);
+
+let mapSwitchSequence = 0;
+let buildingTileset = null;
+let previewRouteEntity = null;
+let previewDroneEntity = null;
+let previewHeadingEntity = null;
+let previewPath = [];
+let previewCumulativeDistances = [];
+let previewDistance = 0;
+let previewRafId = 0;
+let previewLastTimestamp = 0;
+let previewVisualPosition = null;
+let previewHeadingTip = null;
+let previewVisualHeading = 0;
+let previewScreenRotation = 0;
+let previewDroneIcons = null;
+let previewIconSceneMode = null;
 
 const wideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const zoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
@@ -558,6 +684,34 @@ const createDashedRouteMaterial = (color, dashLength = 18) => {
 
 const undergroundRouteMaterial = computed(() => createDashedRouteMaterial('rgba(255, 122, 89, 0.95)'));
 const undergroundRouteDepthFailMaterial = computed(() => createDashedRouteMaterial('rgba(255, 122, 89, 0.55)'));
+
+const mapControlStyle = computed(() => ({
+  left: `${Math.max(16, Number(props.leftOverlayOffset) + 16)}px`
+}));
+const canPreviewRoute = computed(() => (
+  props.routeType === 'waypoint'
+  && !props.isPatrolMode
+  && props.waypoints.filter((point) => point?.lng != null && point?.lat != null).length >= 2
+));
+const previewReady = computed(() => previewPathVersion.value > 0 && previewPath.length >= 2);
+const formatDuration = (seconds) => {
+  const safeSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return minutes > 0 ? `${minutes}分${remainder}秒` : `${remainder}秒`;
+};
+const previewStats = computed(() => ({
+  waypointCount: props.waypoints.filter((point) => point?.lng != null && point?.lat != null).length,
+  distanceLabel: previewTotalDistance.value >= 1000
+    ? `${(previewTotalDistance.value / 1000).toFixed(2)}km`
+    : `${Math.round(previewTotalDistance.value)}m`,
+  durationLabel: formatDuration(previewTotalDistance.value / Math.max(0.1, Number(previewSpeed.value) || 10))
+}));
+const previewAltitudeModeLabel = computed(() => (
+  props.executeHeightMode === 'realTimeFollowSurface'
+    ? '实时仿地高度'
+    : (props.executeHeightMode === 'WGS84' ? 'WGS84 绝对高度' : '相对起飞点高度')
+));
 
 // --- 3. Computed Properties ---
 // 使用 Props 中的 isPatrolMode 避免冲突
@@ -1194,32 +1348,589 @@ const relHeightLabelPosition = computed(() => {
 });
 
 // --- 4. Methods ---
+const ARCGIS_WORLD_IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer';
+const ROUTE_SAMPLE_SPACING_METERS = 20;
+const ROUTE_CLEARANCE_METERS = 20;
+
+const waitForNextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+const enableSceneNavigation = (viewer = viewerInstance.value) => {
+  const controller = viewer?.scene?.screenSpaceCameraController;
+  if (!controller) return;
+  controller.enableInputs = true;
+  controller.enableZoom = true;
+  controller.enableRotate = true;
+  controller.enableTilt = true;
+  controller.enableLook = true;
+  controller.enableTranslate = true;
+};
+
+const ensureScene3D = async (viewer = viewerInstance.value, Cesium = cesiumInstance.value) => {
+  if (!viewer || !Cesium || viewer.isDestroyed?.()) return false;
+  sceneMode.value = Cesium.SceneMode.SCENE3D;
+  await nextTick();
+
+  if (viewer.scene.mode === Cesium.SceneMode.MORPHING) {
+    viewer.scene.completeMorph();
+  }
+  if (viewer.scene.mode !== Cesium.SceneMode.SCENE3D) {
+    viewer.scene.morphTo3D(0);
+    viewer.scene.completeMorph();
+  }
+  enableSceneNavigation(viewer);
+  await waitForNextFrame();
+  return viewer.scene.mode === Cesium.SceneMode.SCENE3D;
+};
+
+const ensureScene2D = async (viewer = viewerInstance.value, Cesium = cesiumInstance.value) => {
+  if (!viewer || !Cesium || viewer.isDestroyed?.()) return false;
+  sceneMode.value = Cesium.SceneMode.SCENE2D;
+  await nextTick();
+
+  if (viewer.scene.mode === Cesium.SceneMode.MORPHING) {
+    viewer.scene.completeMorph();
+  }
+  if (viewer.scene.mode !== Cesium.SceneMode.SCENE2D) {
+    viewer.scene.morphTo2D(0);
+    viewer.scene.completeMorph();
+  }
+  enableSceneNavigation(viewer);
+  await waitForNextFrame();
+  return viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+};
+
+const removeBuildingTileset = () => {
+  const viewer = viewerInstance.value;
+  if (!viewer || !buildingTileset) return;
+  try {
+    if (viewer.scene.primitives.contains(buildingTileset)) {
+      viewer.scene.primitives.remove(buildingTileset);
+    }
+  } catch (error) {
+    console.warn('Failed to remove 3D building tileset.', error);
+  }
+  buildingTileset = null;
+};
+
+const addImageryForMode = async (_mode, Cesium, viewer) => {
+  viewer.imageryLayers.removeAll(true);
+  let provider;
+  if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
+    provider = await Cesium.ArcGisMapServerImageryProvider.fromUrl(ARCGIS_WORLD_IMAGERY_URL, {
+      enablePickFeatures: false
+    });
+  } else {
+    provider = new Cesium.UrlTemplateImageryProvider({
+      url: `${ARCGIS_WORLD_IMAGERY_URL}/tile/{z}/{y}/{x}`,
+      maximumLevel: 19
+    });
+  }
+  viewer.imageryLayers.addImageryProvider(provider);
+};
+
+const applyMapMode = async (options = {}) => {
+  if (!viewerInstance.value || !cesiumInstance.value) return;
+  const preservePreview = options?.preservePreview === true;
+  const sequence = ++mapSwitchSequence;
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  const mode = mapMode.value;
+  mapLoading.value = true;
+  mapStatus.value = '';
+  if (preservePreview) {
+    stopRoutePreviewFrame();
+    unlockPreviewCamera();
+  } else {
+    invalidateRoutePreview();
+  }
+
+  try {
+    removeBuildingTileset();
+    await addImageryForMode(mode, Cesium, viewer);
+    if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
+
+    if (mode === 'buildings') {
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      const entered3D = await ensureScene3D(viewer, Cesium);
+      if (!entered3D) {
+        throw new Error('无法切换到 3D 场景，白模未加载。');
+      }
+      if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
+      const tileset = await Cesium.createOsmBuildingsAsync({
+        enableShowOutline: false
+      });
+      if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) {
+        tileset.destroy?.();
+        return;
+      }
+      tileset.style = new Cesium.Cesium3DTileStyle({
+        color: "color('white', 0.92)"
+      });
+      buildingTileset = markRaw(viewer.scene.primitives.add(tileset));
+      mapStatus.value = 'ArcGIS 影像 · OSM 3D 白模 · 无地形';
+    } else {
+      const terrainProvider = await Cesium.createWorldTerrainAsync();
+      if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
+      viewer.terrainProvider = terrainProvider;
+      mapStatus.value = 'ArcGIS 影像 · WGS84 · Cesium 地形';
+    }
+  } catch (error) {
+    if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
+    console.warn(`Failed to load ${mode} map mode.`, error);
+    if (mode === 'buildings') {
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      mapStatus.value = '3D 白模加载失败，请检查网络或 Cesium Token';
+    } else {
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      mapStatus.value = '地形加载失败，已切换为椭球地面';
+    }
+  } finally {
+    if (sequence === mapSwitchSequence) {
+      mapLoading.value = false;
+      viewer.scene.requestRender();
+    }
+  }
+};
+
+const stopRoutePreviewFrame = () => {
+  if (previewRafId) cancelAnimationFrame(previewRafId);
+  previewRafId = 0;
+  previewLastTimestamp = 0;
+  previewPlaying.value = false;
+};
+
+const unlockPreviewCamera = () => {
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium) return;
+  try {
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+  } catch (error) {
+    console.warn('Failed to unlock preview camera.', error);
+  }
+};
+
+const removePreviewEntities = () => {
+  const viewer = viewerInstance.value;
+  if (viewer && !viewer.isDestroyed?.()) {
+    if (previewRouteEntity) viewer.entities.remove(previewRouteEntity);
+    if (previewDroneEntity) viewer.entities.remove(previewDroneEntity);
+    if (previewHeadingEntity) viewer.entities.remove(previewHeadingEntity);
+  }
+  previewRouteEntity = null;
+  previewDroneEntity = null;
+  previewHeadingEntity = null;
+  previewVisualPosition = null;
+  previewHeadingTip = null;
+  previewVisualHeading = 0;
+  previewScreenRotation = 0;
+  previewIconSceneMode = null;
+};
+
+const invalidateRoutePreview = () => {
+  stopRoutePreviewFrame();
+  unlockPreviewCamera();
+  removePreviewEntities();
+  previewPath = [];
+  previewCumulativeDistances = [];
+  previewDistance = 0;
+  previewTotalDistance.value = 0;
+  previewAltitudeAdjustedCount.value = 0;
+  previewMaxAltitudeAdjustment.value = 0;
+  previewProgress.value = 0;
+  previewFinished.value = false;
+  previewError.value = '';
+  previewPathVersion.value = 0;
+};
+
+const interpolateNumber = (start, end, fraction, fallback = 0) => {
+  const startNumber = Number(start);
+  const endNumber = Number(end);
+  const safeStart = Number.isFinite(startNumber) ? startNumber : fallback;
+  const safeEnd = Number.isFinite(endNumber) ? endNumber : safeStart;
+  return safeStart + (safeEnd - safeStart) * fraction;
+};
+
+const buildResamplePlan = (Cesium) => {
+  const waypoints = props.waypoints.filter((point) => point?.lng != null && point?.lat != null);
+  const samples = [];
+
+  for (let index = 0; index < waypoints.length - 1; index += 1) {
+    const start = Cesium.Cartographic.fromDegrees(Number(waypoints[index].lng), Number(waypoints[index].lat));
+    const end = Cesium.Cartographic.fromDegrees(Number(waypoints[index + 1].lng), Number(waypoints[index + 1].lat));
+    const geodesic = new Cesium.EllipsoidGeodesic(start, end);
+    const steps = Math.max(1, Math.ceil(geodesic.surfaceDistance / ROUTE_SAMPLE_SPACING_METERS));
+    for (let step = 0; step < steps; step += 1) {
+      const fraction = step / steps;
+      samples.push({
+        cartographic: geodesic.interpolateUsingFraction(fraction, new Cesium.Cartographic()),
+        plannedAbsoluteAltitude: interpolateNumber(
+          resolveDisplayAltitude(waypoints[index]),
+          resolveDisplayAltitude(waypoints[index + 1]),
+          fraction
+        ),
+        plannedSurfaceOffset: interpolateNumber(
+          waypoints[index].height,
+          waypoints[index + 1].height,
+          fraction,
+          ROUTE_CLEARANCE_METERS
+        )
+      });
+    }
+  }
+
+  const last = waypoints[waypoints.length - 1];
+  samples.push({
+    cartographic: Cesium.Cartographic.fromDegrees(Number(last.lng), Number(last.lat)),
+    plannedAbsoluteAltitude: resolveDisplayAltitude(last),
+    plannedSurfaceOffset: Number.isFinite(Number(last.height)) ? Number(last.height) : ROUTE_CLEARANCE_METERS
+  });
+  return samples;
+};
+
+const flyCameraToRoute = (cartographics, Cesium, viewer) => new Promise((resolve) => {
+  const positions = cartographics.map((point) => Cesium.Cartesian3.fromRadians(point.longitude, point.latitude, 80));
+  const sphere = Cesium.BoundingSphere.fromPoints(positions);
+  viewer.camera.flyToBoundingSphere(sphere, {
+    offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-35), Math.max(300, sphere.radius * 3)),
+    duration: 0.6,
+    complete: resolve,
+    cancel: resolve
+  });
+});
+
+const rebuildPreviewDistances = (Cesium) => {
+  previewCumulativeDistances = [0];
+  for (let index = 1; index < previewPath.length; index += 1) {
+    const nextDistance = previewCumulativeDistances[index - 1]
+      + Cesium.Cartesian3.distance(previewPath[index - 1], previewPath[index]);
+    previewCumulativeDistances.push(nextDistance);
+  }
+  previewTotalDistance.value = previewCumulativeDistances[previewCumulativeDistances.length - 1] || 0;
+};
+
+const prepareRoutePreview = async () => {
+  if (!canPreviewRoute.value || mapMode.value !== 'buildings' || !viewerInstance.value || !cesiumInstance.value) return;
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  previewPreparing.value = true;
+  previewError.value = '';
+  invalidateRoutePreview();
+
+  try {
+    if (!buildingTileset) {
+      throw new Error('3D 白模尚未加载完成，请检查网络或 Cesium Token。');
+    }
+    if (!await ensureScene3D(viewer, Cesium)) {
+      throw new Error('无法进入 3D 场景，不能生成贴楼预览。');
+    }
+    const resamplePlan = buildResamplePlan(Cesium);
+    const cartographics = resamplePlan.map(sample => sample.cartographic);
+    await flyCameraToRoute(cartographics, Cesium, viewer);
+    if (viewerInstance.value !== viewer) return;
+
+    const visibleEntities = viewer.entities.values.filter((entity) => entity.show);
+    visibleEntities.forEach((entity) => { entity.show = false; });
+    viewer.scene.requestRender();
+    await waitForNextFrame();
+
+    let sampled;
+    try {
+      sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
+    } finally {
+      visibleEntities.forEach((entity) => { entity.show = true; });
+    }
+
+    let adjustedCount = 0;
+    let maxAdjustment = 0;
+    previewPath = sampled.map((point, index) => {
+      const sampledHeight = Number.isFinite(point.height)
+        ? point.height
+        : (viewer.scene.globe.getHeight(point) || 0);
+      const plan = resamplePlan[index];
+      const plannedAltitude = props.executeHeightMode === 'realTimeFollowSurface'
+        ? sampledHeight + Number(plan?.plannedSurfaceOffset || 0)
+        : Number(plan?.plannedAbsoluteAltitude);
+      const safeAltitude = sampledHeight + ROUTE_CLEARANCE_METERS;
+      const resolvedPlannedAltitude = Number.isFinite(plannedAltitude) ? plannedAltitude : safeAltitude;
+      const previewAltitude = Math.max(resolvedPlannedAltitude, safeAltitude);
+      const adjustment = Math.max(0, previewAltitude - resolvedPlannedAltitude);
+      if (adjustment > 0.05) {
+        adjustedCount += 1;
+        maxAdjustment = Math.max(maxAdjustment, adjustment);
+      }
+      return markRaw(Cesium.Cartesian3.fromRadians(
+        point.longitude,
+        point.latitude,
+        previewAltitude
+      ));
+    });
+    previewAltitudeAdjustedCount.value = adjustedCount;
+    previewMaxAltitudeAdjustment.value = maxAdjustment;
+
+    rebuildPreviewDistances(Cesium);
+    if (previewPath.length < 2 || previewTotalDistance.value <= 0) {
+      throw new Error('航线采样结果不足，无法播放。');
+    }
+
+    previewRouteEntity = markRaw(viewer.entities.add({
+      name: '3D 白模贴楼预览航线',
+      polyline: {
+        positions: previewPath,
+        width: 5,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          color: Cesium.Color.CYAN.withAlpha(0.9),
+          glowPower: 0.22
+        }),
+        depthFailMaterial: Cesium.Color.CYAN.withAlpha(0.35)
+      }
+    }));
+    previewVisualPosition = previewPath[0];
+    previewHeadingTip = previewPath[1];
+    previewVisualHeading = 0;
+    previewDroneIcons ||= createDronePreviewIcons();
+    previewDroneEntity = markRaw(viewer.entities.add({
+      name: '航线预览无人机',
+      position: new Cesium.CallbackProperty(() => previewVisualPosition, false),
+      point: {
+        pixelSize: 9,
+        color: Cesium.Color.fromCssColorString('#ffb020'),
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      },
+      billboard: {
+        image: previewDroneIcons.threeD,
+        width: 80,
+        height: 64,
+        rotation: new Cesium.CallbackProperty(() => previewScreenRotation, false),
+        horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+        verticalOrigin: Cesium.VerticalOrigin.CENTER,
+        scaleByDistance: new Cesium.NearFarScalar(80, 1.15, 5000, 0.65),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      },
+      label: {
+        text: new Cesium.CallbackProperty(
+          () => `无人机 · 航向 ${Math.round(Cesium.Math.toDegrees(previewVisualHeading) + 360) % 360}°`,
+          false
+        ),
+        font: 'bold 12px sans-serif',
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.7),
+        pixelOffset: new Cesium.Cartesian2(0, -44),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      }
+    }));
+    previewHeadingEntity = markRaw(viewer.entities.add({
+      name: '航线预览无人机航向',
+      polyline: {
+        positions: new Cesium.CallbackProperty(
+          () => (previewVisualPosition && previewHeadingTip ? [previewVisualPosition, previewHeadingTip] : []),
+          false
+        ),
+        width: 4,
+        material: new Cesium.PolylineArrowMaterialProperty(Cesium.Color.fromCssColorString('#ffb020')),
+        depthFailMaterial: new Cesium.PolylineArrowMaterialProperty(Cesium.Color.fromCssColorString('#ffb020').withAlpha(0.55)),
+        arcType: Cesium.ArcType.NONE
+      }
+    }));
+    previewPathVersion.value += 1;
+    updateRoutePreviewPosition(0);
+    viewer.scene.requestRender();
+  } catch (error) {
+    console.error('Failed to prepare building-aware route preview.', error);
+    invalidateRoutePreview();
+    previewError.value = error?.message || '航线贴楼采样失败，请确认 3D 白模已加载。';
+  } finally {
+    previewPreparing.value = false;
+  }
+};
+
+const findPreviewSegment = (distance) => {
+  for (let index = 1; index < previewCumulativeDistances.length; index += 1) {
+    if (previewCumulativeDistances[index] >= distance) return index - 1;
+  }
+  return Math.max(0, previewCumulativeDistances.length - 2);
+};
+
+const getPreviewHeading = (position, nextPosition, Cesium) => {
+  const transform = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+  const inverse = Cesium.Matrix4.inverseTransformation(transform, new Cesium.Matrix4());
+  const localNext = Cesium.Matrix4.multiplyByPoint(inverse, nextPosition, new Cesium.Cartesian3());
+  return Math.atan2(localNext.x, localNext.y);
+};
+
+const updatePreviewScreenRotation = (viewer, Cesium) => {
+  if (!previewVisualPosition || !previewHeadingTip) return;
+  const start = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, previewVisualPosition);
+  const end = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, previewHeadingTip);
+  if (!start || !end) return;
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) || Math.hypot(deltaX, deltaY) < 0.5) return;
+
+  // 两套 SVG 均以图标顶部为机头。Cesium Billboard.rotation 为逆时针正方向，
+  // 浏览器屏幕 Y 轴向下，因此对屏幕前向向量取相反角度。
+  previewScreenRotation = -Math.atan2(deltaX, -deltaY);
+};
+
+const updatePreviewBillboardForScene = (viewer, Cesium) => {
+  if (!previewDroneEntity?.billboard || !previewDroneIcons) return;
+  const currentMode = viewer.scene.mode;
+  if (previewIconSceneMode === currentMode) return;
+  const is2D = currentMode === Cesium.SceneMode.SCENE2D;
+  previewDroneEntity.billboard.image = is2D ? previewDroneIcons.twoD : previewDroneIcons.threeD;
+  previewDroneEntity.billboard.width = is2D ? 60 : 80;
+  previewDroneEntity.billboard.height = is2D ? 60 : 64;
+  previewIconSceneMode = currentMode;
+};
+
+const followPreviewCamera = (position, nextPosition) => {
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium) return;
+  let heading = getPreviewHeading(position, nextPosition, Cesium);
+  const direction = Cesium.Cartesian3.subtract(nextPosition, position, new Cesium.Cartesian3());
+  const hasDirection = Cesium.Cartesian3.magnitudeSquared(direction) > 0.0001;
+  previewVisualPosition = position;
+  if (hasDirection) {
+    Cesium.Cartesian3.normalize(direction, direction);
+    previewHeadingTip = Cesium.Cartesian3.add(
+      position,
+      Cesium.Cartesian3.multiplyByScalar(direction, 35, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    previewVisualHeading = heading;
+  } else {
+    heading = previewVisualHeading;
+  }
+
+  const is2D = viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+  updatePreviewBillboardForScene(viewer, Cesium);
+  const showAircraftMarker = is2D || previewViewMode.value !== 'first';
+  if (previewDroneEntity) previewDroneEntity.show = showAircraftMarker;
+  if (previewHeadingEntity) previewHeadingEntity.show = showAircraftMarker;
+
+  if (is2D) {
+    unlockPreviewCamera();
+    const cartographic = Cesium.Cartographic.fromCartesian(position);
+    const viewHeight = Math.max(300, Number(viewer.camera.positionCartographic?.height) || 1000);
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromRadians(
+        cartographic.longitude,
+        cartographic.latitude,
+        viewHeight
+      ),
+      orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 }
+    });
+    updatePreviewScreenRotation(viewer, Cesium);
+    return;
+  }
+
+  if (previewViewMode.value === 'first') {
+    unlockPreviewCamera();
+    const cartographic = Cesium.Cartographic.fromCartesian(position);
+    const eyePosition = Cesium.Cartesian3.fromRadians(
+      cartographic.longitude,
+      cartographic.latitude,
+      cartographic.height + 2
+    );
+    viewer.camera.setView({
+      destination: eyePosition,
+      orientation: { heading, pitch: 0, roll: 0 }
+    });
+  } else {
+    viewer.camera.lookAt(
+      position,
+      new Cesium.HeadingPitchRange(heading, Cesium.Math.toRadians(-30), 100)
+    );
+    unlockPreviewCamera();
+  }
+  updatePreviewScreenRotation(viewer, Cesium);
+};
+
+const updateRoutePreviewPosition = (distance) => {
+  if (!previewReady.value || !cesiumInstance.value || !previewDroneEntity) return;
+  const Cesium = cesiumInstance.value;
+  const total = previewTotalDistance.value;
+  previewDistance = Math.max(0, Math.min(total, Number(distance) || 0));
+  const segmentIndex = findPreviewSegment(previewDistance);
+  const startDistance = previewCumulativeDistances[segmentIndex];
+  const endDistance = previewCumulativeDistances[segmentIndex + 1];
+  const fraction = endDistance > startDistance
+    ? (previewDistance - startDistance) / (endDistance - startDistance)
+    : 0;
+  const position = Cesium.Cartesian3.lerp(
+    previewPath[segmentIndex],
+    previewPath[segmentIndex + 1],
+    fraction,
+    new Cesium.Cartesian3()
+  );
+  previewProgress.value = total > 0 ? (previewDistance / total) * 100 : 0;
+  followPreviewCamera(position, previewPath[segmentIndex + 1]);
+  viewerInstance.value?.scene?.requestRender?.();
+};
+
+const runRoutePreviewFrame = (timestamp) => {
+  if (!previewPlaying.value) return;
+  const previousTimestamp = previewLastTimestamp || timestamp;
+  const deltaSeconds = Math.min(0.1, Math.max(0, (timestamp - previousTimestamp) / 1000));
+  previewLastTimestamp = timestamp;
+  updateRoutePreviewPosition(previewDistance + deltaSeconds * Math.max(0.1, Number(previewSpeed.value) || 10));
+
+  if (previewDistance >= previewTotalDistance.value) {
+    stopRoutePreviewFrame();
+    previewFinished.value = true;
+    unlockPreviewCamera();
+    return;
+  }
+  previewRafId = requestAnimationFrame(runRoutePreviewFrame);
+};
+
+const toggleRoutePreview = () => {
+  if (!previewReady.value) return;
+  if (previewPlaying.value) {
+    stopRoutePreviewFrame();
+    unlockPreviewCamera();
+    return;
+  }
+  if (previewFinished.value || previewDistance >= previewTotalDistance.value) {
+    previewFinished.value = false;
+    updateRoutePreviewPosition(0);
+  }
+  previewPlaying.value = true;
+  previewLastTimestamp = 0;
+  previewRafId = requestAnimationFrame(runRoutePreviewFrame);
+};
+
+const resetRoutePreview = () => {
+  stopRoutePreviewFrame();
+  previewFinished.value = false;
+  if (previewReady.value) updateRoutePreviewPosition(0);
+  unlockPreviewCamera();
+};
+
+const seekRoutePreview = (progress) => {
+  if (!previewReady.value) return;
+  previewFinished.value = false;
+  updateRoutePreviewPosition((Math.max(0, Math.min(100, Number(progress) || 0)) / 100) * previewTotalDistance.value);
+  if (!previewPlaying.value) unlockPreviewCamera();
+};
+
 const onViewerReadyInternal = ({ Cesium, viewer }) => {
   cesiumInstance.value = markRaw(Cesium);
   viewerInstance.value = markRaw(viewer);
   Cesium.Ion.defaultAccessToken = cesiumAccessToken;
-  viewer.imageryLayers.removeAll();
-  viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-    url: 'https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-    minimumLevel: 1,
-    maximumLevel: 18
-  }));
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+  enableSceneNavigation(viewer);
   viewer.scene.globe.baseColor = Cesium.Color.BLACK;
   viewer.scene.skyAtmosphere.show = true;
   viewer.scene.globe.showGroundAtmosphere = true;
   viewer.scene.fog.enabled = true;
 
-  const readyViewer = viewer;
-  Cesium.createWorldTerrainAsync().then(tp => {
-    if (viewerInstance.value !== readyViewer || readyViewer.isDestroyed?.()) return;
-    readyViewer.terrainProvider = tp;
-  }).catch(err => {
-    if (viewerInstance.value !== readyViewer || readyViewer.isDestroyed?.()) return;
-    console.warn('⚠️ Cesium Ion 地形加载失败...', err);
-    readyViewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-  });
+  applyMapMode();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   eventHandler.value = handler;
@@ -1330,10 +2041,14 @@ const onMapClick = (e) => {
   });
 };
 
-const toggleSceneMode = () => {
+const toggleSceneMode = async () => {
   if (!viewerInstance.value || !cesiumInstance.value) return;
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
+
+  if (viewer.scene.mode === Cesium.SceneMode.MORPHING) {
+    viewer.scene.completeMorph();
+  }
 
   const canvas = viewer.scene.canvas;
   const width = canvas.clientWidth || 1024;
@@ -1342,59 +2057,71 @@ const toggleSceneMode = () => {
   const ray = viewer.camera.getPickRay(windowPosition);
   const cartesian = viewer.scene.globe.pick(ray, viewer.scene);
 
-  let targetCarto;
-  if (cartesian) {
-    targetCarto = Cesium.Cartographic.fromCartesian(cartesian);
-  } else {
-    targetCarto = viewer.camera.positionCartographic;
-  }
+  const targetCarto = cartesian
+    ? Cesium.Cartographic.fromCartesian(cartesian)
+    : (viewer.camera.positionCartographic
+      || Cesium.Cartographic.fromCartesian(viewer.camera.positionWC || viewer.camera.position));
+  if (!targetCarto || !Number.isFinite(targetCarto.longitude) || !Number.isFinite(targetCarto.latitude)) return;
 
   const lon = Cesium.Math.toDegrees(targetCarto.longitude);
   const lat = Cesium.Math.toDegrees(targetCarto.latitude);
-  const height = viewer.camera.positionCartographic.height;
+  const height = Number(viewer.camera.positionCartographic?.height || targetCarto.height || 1000);
   const headingRad = viewer.camera.heading;
 
-  const isCurrently2D = sceneMode.value === 2;
-  sceneMode.value = isCurrently2D ? 3 : 2;
+  const isCurrently2D = viewer.scene.mode === Cesium.SceneMode.SCENE2D;
+  if (!isCurrently2D && mapMode.value === 'buildings') {
+    // OSM 3D Tiles 不参与 2D 渲染。先销毁白模并恢复标准地图，再切换场景，
+    // 避免 ModelSceneGraph 在 computeModelMatrix2D 阶段读取无效投影中心。
+    mapMode.value = 'standard';
+    await applyMapMode({ preservePreview: true });
+    if (viewerInstance.value !== viewer) return;
+  }
+
+  const switched = isCurrently2D
+    ? await ensureScene3D(viewer, Cesium)
+    : await ensureScene2D(viewer, Cesium);
+  if (!switched || viewerInstance.value !== viewer) return;
+
+  if (previewReady.value) {
+    updateRoutePreviewPosition(previewDistance);
+    return;
+  }
+
+  const is3D = viewer.scene.mode === Cesium.SceneMode.SCENE3D;
   const targetPitchDeg = isCurrently2D ? -15 : -90;
+  const targetPitchRad = Cesium.Math.toRadians(targetPitchDeg);
 
-  setTimeout(() => {
-    if (!viewerInstance.value || !cesiumInstance.value) return;
-    const is3D = sceneMode.value === 3;
-    const targetPitchRad = Cesium.Math.toRadians(targetPitchDeg);
+  if (props.waypoints?.length > 0) {
+    const firstWp = props.waypoints[0];
+    const gH = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(firstWp.lng, firstWp.lat)) || 0;
+    const positions = props.waypoints.map(wp => Cesium.Cartesian3.fromDegrees(wp.lng, wp.lat, gH + (wp.height || 0)));
+    const sphere = Cesium.BoundingSphere.fromPoints(positions);
+    const range = Math.max(sphere.radius * (is3D ? 3.0 : 2.5), 1000);
 
-    if (props.waypoints?.length > 0) {
-      const firstWp = props.waypoints[0];
-      const gH = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(firstWp.lng, firstWp.lat)) || 0;
-      const positions = props.waypoints.map(wp => Cesium.Cartesian3.fromDegrees(wp.lng, wp.lat, gH + (wp.height || 0)));
-      const sphere = Cesium.BoundingSphere.fromPoints(positions);
-      const range = Math.max(sphere.radius * (is3D ? 3.0 : 2.5), 1000);
+    viewer.camera.flyToBoundingSphere(sphere, {
+      offset: new Cesium.HeadingPitchRange(headingRad, targetPitchRad, range),
+      duration: 1.0
+    });
 
-      viewer.camera.flyToBoundingSphere(sphere, {
-        offset: new Cesium.HeadingPitchRange(headingRad, targetPitchRad, range),
-        duration: 1.0
-      });
-
-      camera.value = {
-        position: { lng: lon, lat: lat, height: range },
-        heading: Cesium.Math.toDegrees(headingRad),
-        pitch: targetPitchDeg,
-        roll: 0
-      };
-    } else {
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
-        orientation: { heading: headingRad, pitch: targetPitchRad, roll: 0 },
-        duration: 1.0
-      });
-      camera.value = {
-        position: { lng: lon, lat: lat, height: height },
-        heading: Cesium.Math.toDegrees(headingRad),
-        pitch: targetPitchDeg,
-        roll: 0
-      };
-    }
-  }, 100);
+    camera.value = {
+      position: { lng: lon, lat: lat, height: range },
+      heading: Cesium.Math.toDegrees(headingRad),
+      pitch: targetPitchDeg,
+      roll: 0
+    };
+  } else {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+      orientation: { heading: headingRad, pitch: targetPitchRad, roll: 0 },
+      duration: 1.0
+    });
+    camera.value = {
+      position: { lng: lon, lat: lat, height },
+      heading: Cesium.Math.toDegrees(headingRad),
+      pitch: targetPitchDeg,
+      roll: 0
+    };
+  }
 };
 
 const resolveDroneAbsoluteAltitude = (dronePos, viewer, Cesium) => {
@@ -1556,10 +2283,15 @@ const getCurrentPose = () => {
   };
 };
 
-const resetTo2D = () => {
+const resetTo2D = async () => {
   if (!viewerInstance.value || !cesiumInstance.value) return;
-  if (sceneMode.value === 2) return;
-  nextTick(() => { sceneMode.value = 2; });
+  if (mapMode.value === 'buildings') {
+    mapMode.value = 'standard';
+    await applyMapMode({ preservePreview: true });
+  }
+  if (!viewerInstance.value || viewerInstance.value.scene.mode === cesiumInstance.value.SceneMode.SCENE2D) return;
+  await ensureScene2D();
+  if (previewReady.value) updateRoutePreviewPosition(previewDistance);
 };
 
 const clearFov = () => {
@@ -1619,13 +2351,35 @@ watch(() => props.waypoints, (newWps, oldWps) => {
 }, { deep: false });
 
 watch(() => props.waypoints?.length, (newLen, oldLen) => {
-  if (oldLen > 0 && newLen === 0 && sceneMode.value === 3) {
-    sceneMode.value = 2;
+  if (oldLen > 0 && newLen === 0 && sceneMode.value === 3 && mapMode.value !== 'buildings') {
+    ensureScene2D();
   }
+});
+
+watch(
+  () => props.waypoints
+    .map((point) => `${Number(point?.lng || 0).toFixed(8)},${Number(point?.lat || 0).toFixed(8)},${Number(point?.height || 0).toFixed(2)}`)
+    .join('|'),
+  (signature, previousSignature) => {
+    if (previousSignature !== undefined && signature !== previousSignature && previewReady.value) {
+      invalidateRoutePreview();
+    }
+  }
+);
+
+watch(() => props.routeType, () => {
+  if (previewReady.value) invalidateRoutePreview();
+});
+
+watch(previewViewMode, () => {
+  if (previewReady.value) updateRoutePreviewPosition(previewDistance);
 });
 
 // --- 6. Lifecycle ---
 onBeforeUnmount(() => {
+  mapSwitchSequence += 1;
+  invalidateRoutePreview();
+  removeBuildingTileset();
   clearFov();
   if (eventHandler.value) {
     try {
@@ -1641,5 +2395,5 @@ onBeforeUnmount(() => {
   cesiumInstance.value = null;
 });
 
-defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, clearFov, clearVirtualFlight });
+defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, mapMode, clearFov, clearVirtualFlight });
 </script>

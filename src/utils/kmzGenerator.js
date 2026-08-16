@@ -57,6 +57,15 @@ const getMissionNumericValue = (value, fallback) => {
   return Number.isFinite(numericValue) ? numericValue : fallback;
 };
 
+const toWgs84Coordinate = (missionConfig, lng, lat) => {
+  const normalizedLng = Number(lng);
+  const normalizedLat = Number(lat);
+  if (missionConfig?.coordinateSystem === 'WGS84') {
+    return { lng: normalizedLng, lat: normalizedLat };
+  }
+  return gcj02ToWgs84(normalizedLng, normalizedLat);
+};
+
 const resolveObstacleAvoidanceMode = (missionConfig = {}) => (missionConfig.useObstacleAvoidance === false ? 0 : 1);
 
 const resolveFlyToWaylineMode = (missionConfig = {}) => {
@@ -103,7 +112,7 @@ const getTakeOffRefPointXml = (missionConfig, waypoints, options = {}) => {
 
   if (refLat === 0 && refLng === 0) return '';
 
-  const wgs84 = gcj02ToWgs84(refLng, refLat);
+  const wgs84 = toWgs84Coordinate(missionConfig, refLng, refLat);
   // DJI template files use `lat,lng,height` order here.
   return `
       <wpml:takeOffRefPoint>${wgs84.lat},${wgs84.lng},${refHeight}</wpml:takeOffRefPoint>
@@ -228,12 +237,12 @@ const getPatrolAiConfig = (missionConfig) => {
   };
 };
 
-const getClosedPatrolPolygonCoordinates = (points) => {
+const getClosedPatrolPolygonCoordinates = (points, missionConfig = {}) => {
   const validPoints = (points || []).filter(point => point && typeof point.lng === 'number' && typeof point.lat === 'number');
   if (validPoints.length < 3) return [];
 
   const coordinates = validPoints.map(point => {
-    const wgs84 = gcj02ToWgs84(point.lng, point.lat);
+    const wgs84 = toWgs84Coordinate(missionConfig, point.lng, point.lat);
     return [wgs84.lng, wgs84.lat];
   });
 
@@ -246,8 +255,8 @@ const getClosedPatrolPolygonCoordinates = (points) => {
   return coordinates;
 };
 
-const buildPatrolAreaJson = (polygonPoints, actionUUID) => {
-  const coordinates = getClosedPatrolPolygonCoordinates(polygonPoints);
+const buildPatrolAreaJson = (polygonPoints, actionUUID, missionConfig = {}) => {
+  const coordinates = getClosedPatrolPolygonCoordinates(polygonPoints, missionConfig);
   if (coordinates.length < 4) return null;
 
   return JSON.stringify({
@@ -379,7 +388,7 @@ const generateTemplateKml = (missionConfig, waypoints, boundaryPoints = null, pa
     const pointsToRender = isClosed ? filteredPoints : [...filteredPoints, first];
     polygonCoords = pointsToRender
       .map(p => {
-        const wgs84 = gcj02ToWgs84(p.lng, p.lat);
+        const wgs84 = toWgs84Coordinate(missionConfig, p.lng, p.lat);
         return `${wgs84.lng},${wgs84.lat},0`;
       })
       .join('\n                ');
@@ -387,7 +396,7 @@ const generateTemplateKml = (missionConfig, waypoints, boundaryPoints = null, pa
     // Default small box around the first point or a fixed location
     const baseLat = waypoints.length > 0 ? waypoints[0].lat : 31.0909;
     const baseLng = waypoints.length > 0 ? waypoints[0].lng : 104.3903;
-    const baseWgs84 = gcj02ToWgs84(baseLng, baseLat);
+    const baseWgs84 = toWgs84Coordinate(missionConfig, baseLng, baseLat);
     polygonCoords = `
                 ${baseWgs84.lng - 0.001},${baseWgs84.lat - 0.001},0
                 ${baseWgs84.lng + 0.001},${baseWgs84.lat - 0.001},0
@@ -495,7 +504,7 @@ const generateTemplateKml = (missionConfig, waypoints, boundaryPoints = null, pa
         ${patrolAiEnabled ? generateTargetDetectionActionXml(missionConfig, currentPatrolContext, 0) : ''}
       </Placemark>` :
       waypoints.map((wp, index) => {
-        const wgs84 = gcj02ToWgs84(wp.lng, wp.lat);
+        const wgs84 = toWgs84Coordinate(missionConfig, wp.lng, wp.lat);
         const height = wp.height || missionConfig.globalHeight || 70;
         // KML altitudeMode 映射：ASL -> absolute, 地形 -> relativeToGround, 起飞�?-> relativeToGround (KML 兼容�?
         const kmlAltMode = missionConfig.executeHeightMode === 'WGS84' ? 'absolute' : 'relativeToGround';
@@ -743,7 +752,7 @@ const generateWaypointsXml = (missionConfig, waypoints, isPatrol, patrolContext 
   waypoints
     .filter(wp => wp && typeof wp.lng === 'number' && typeof wp.lat === 'number')
     .forEach((wp, index) => {
-      const wgs84 = gcj02ToWgs84(wp.lng, wp.lat);
+      const wgs84 = toWgs84Coordinate(missionConfig, wp.lng, wp.lat);
       const isLastWaypoint = index === waypoints.length - 1;
       const height = wp.height || missionConfig.globalHeight || 70;
       const executeHeight = (missionConfig.executeHeightMode === 'WGS84' && typeof wp.ellipsoidHeight === 'number')
@@ -1217,7 +1226,6 @@ export const generateKMZ = async (missionConfig, waypoints, boundaryPoints = nul
   const content = await zip.generateAsync({ type: "blob" });
   return content;
 };
-
 
 
 

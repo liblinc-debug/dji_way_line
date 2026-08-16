@@ -23,6 +23,7 @@
         <div class="h-full w-[330px] shrink-0 border-r border-gray-200 bg-white shadow-lg pointer-events-auto">
           <MissionLibrary :missions="missions" :selected-id="previewMission?.id" @create="showCreateModal = true"
             @select="handlePreviewMission" @edit="selectMission" @delete="deleteMission" @download="downloadKMZ"
+            @rename="renameMission"
             class="h-full" />
         </div>
         <!-- 右侧区域透明，显示地图 -->
@@ -72,13 +73,16 @@ import {
   getV2CompatibleWaypointExportMeta
 } from '../../constants/aircraftModels.js';
 import { mergeDerivedRequirements, normalizeRouteLinking } from '../../utils/routeLinking.js';
+import { gcj02ToWgs84 } from '../../utils/coordTransform.js';
 import CreateMissionModal from './CreateMissionModal.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
 import MissionLibrary from './MissionLibrary.vue';
 
 const MISSIONS_STORAGE_KEY = 'missions';
+const MISSIONS_GCJ02_BACKUP_KEY = 'missions-gcj02-backup-v1';
 const UI_STATE_STORAGE_KEY = 'waypoint-generator-ui-state';
+const MISSION_COORDINATE_SYSTEM = 'WGS84';
 const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090');
 
 const missions = ref([]);
@@ -369,10 +373,59 @@ const normalizeMissionConfig = (config = {}) => {
   };
 };
 
-const normalizeMission = (mission = {}) => ({
-  ...mission,
-  config: normalizeMissionConfig(mission.config || {})
-});
+const migratePointToWgs84 = (point) => {
+  if (!point || !Number.isFinite(Number(point.lng)) || !Number.isFinite(Number(point.lat))) return point;
+  const converted = gcj02ToWgs84(Number(point.lng), Number(point.lat));
+  return { ...point, lng: converted.lng, lat: converted.lat };
+};
+
+const migratePointCollectionToWgs84 = (items) => {
+  if (!Array.isArray(items)) return items;
+  return items.map((item) => {
+    if (Array.isArray(item)) return item.map(migratePointToWgs84);
+    if (Array.isArray(item?.points)) return { ...item, points: item.points.map(migratePointToWgs84) };
+    return migratePointToWgs84(item);
+  });
+};
+
+const migrateMissionToWgs84 = (mission = {}) => {
+  const sourceConfig = mission.config || {};
+  if (sourceConfig.coordinateSystem === MISSION_COORDINATE_SYSTEM) return mission;
+
+  const takeoffLng = Number(sourceConfig.takeOffPointLng);
+  const takeoffLat = Number(sourceConfig.takeOffPointLat);
+  const convertedTakeoff = Number.isFinite(takeoffLng) && Number.isFinite(takeoffLat)
+    ? gcj02ToWgs84(takeoffLng, takeoffLat)
+    : null;
+  const convertedTakeoffPoint = sourceConfig.takeoffPoint
+    ? migratePointToWgs84(sourceConfig.takeoffPoint)
+    : sourceConfig.takeoffPoint;
+
+  return {
+    ...mission,
+    config: {
+      ...sourceConfig,
+      coordinateSystem: MISSION_COORDINATE_SYSTEM,
+      ...(convertedTakeoff ? {
+        takeOffPointLng: convertedTakeoff.lng,
+        takeOffPointLat: convertedTakeoff.lat
+      } : {}),
+      ...(convertedTakeoffPoint ? { takeoffPoint: convertedTakeoffPoint } : {})
+    },
+    waypoints: migratePointCollectionToWgs84(mission.waypoints) || [],
+    scanPath: migratePointCollectionToWgs84(mission.scanPath) || [],
+    coverageArea: migratePointCollectionToWgs84(mission.coverageArea) || [],
+    cuttingSegments: migratePointCollectionToWgs84(mission.cuttingSegments) || []
+  };
+};
+
+const normalizeMission = (mission = {}) => {
+  const migratedMission = migrateMissionToWgs84(mission);
+  return {
+    ...migratedMission,
+    config: normalizeMissionConfig(migratedMission.config || {})
+  };
+};
 
 // 统一地图数据源：优先使用编辑器数据，兜底使用任务库预览数据
 // 使用缓存机制防止每次计算都返回新对象，避免触发 MapViewer 重新初始化
@@ -570,6 +623,7 @@ const handlePreviewMission = (id) => {
 };
 const defaultMissionConfig = {
   missionName: '未命名航线',
+  coordinateSystem: MISSION_COORDINATE_SYSTEM,
   routeType: 'waypoint',
   aircraftSeries: 'm30',
   aircraftModel: 'm30t',
@@ -733,7 +787,15 @@ onMounted(() => {
   const saved = localStorage.getItem(MISSIONS_STORAGE_KEY);
   if (saved) {
     try {
-      missions.value = JSON.parse(saved).map(normalizeMission);
+      const savedMissions = JSON.parse(saved);
+      const needsCoordinateMigration = savedMissions.some(
+        mission => mission?.config?.coordinateSystem !== MISSION_COORDINATE_SYSTEM
+      );
+      if (needsCoordinateMigration && !localStorage.getItem(MISSIONS_GCJ02_BACKUP_KEY)) {
+        localStorage.setItem(MISSIONS_GCJ02_BACKUP_KEY, saved);
+      }
+      missions.value = savedMissions.map(normalizeMission);
+      localStorage.setItem(MISSIONS_STORAGE_KEY, JSON.stringify(missions.value));
     } catch (e) {
       console.error('Failed to load missions', e);
     }
@@ -876,6 +938,28 @@ const deleteMission = (id) => {
     missions.value = missions.value.filter(m => m.id !== id);
     saveMissionsToStorage();
   }
+};
+
+const renameMission = async ({ id, name }) => {
+  const normalizedName = String(name || '').trim();
+  const index = missions.value.findIndex(mission => mission.id === id);
+  if (index < 0 || !normalizedName) return;
+
+  const current = missions.value[index];
+  const updatedMission = {
+    ...current,
+    name: normalizedName,
+    updatedAt: Date.now(),
+    config: {
+      ...(current.config || {}),
+      missionName: normalizedName
+    }
+  };
+  missions.value[index] = updatedMission;
+  missions.value = [...missions.value];
+  if (previewMission.value?.id === id) previewMission.value = updatedMission;
+  saveMissionsToStorage();
+  await syncMissionToBackend(updatedMission);
 };
 
 const downloadKMZ = async (id) => {
