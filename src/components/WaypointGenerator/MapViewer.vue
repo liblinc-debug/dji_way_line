@@ -736,6 +736,9 @@ let previewScreenRotation = 0;
 let previewDroneIcons = null;
 let previewIconSceneMode = null;
 let previewLastFovUpdateAt = 0;
+let previewCameraFollowMode = 'idle';
+let previewThirdPersonRange = 100;
+let preview2DFrustumWidth = 0;
 
 const wideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const zoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
@@ -1625,6 +1628,9 @@ const removePreviewEntities = () => {
   previewScreenRotation = 0;
   previewIconSceneMode = null;
   previewLastFovUpdateAt = 0;
+  previewCameraFollowMode = 'idle';
+  previewThirdPersonRange = 100;
+  preview2DFrustumWidth = 0;
   routePreviewDronePosition.value = null;
   routePreviewWideFovData.value = { points: [], rawPoints: [] };
   routePreviewZoomFovData.value = { points: [], rawPoints: [] };
@@ -1999,10 +2005,53 @@ const updatePreviewBillboardForScene = (viewer, Cesium) => {
   previewIconSceneMode = currentMode;
 };
 
+const captureThirdPersonRange = (viewer, Cesium, previousTarget) => {
+  if (previewCameraFollowMode !== 'third' || !previousTarget || !viewer.camera.positionWC) return;
+  const range = Cesium.Cartesian3.distance(viewer.camera.positionWC, previousTarget);
+  if (Number.isFinite(range)) {
+    previewThirdPersonRange = Math.max(5, Math.min(50000, range));
+  }
+};
+
+const capture2DFrustumWidth = (viewer) => {
+  const frustum = viewer.camera.frustum;
+  const width = Number(frustum?.right) - Number(frustum?.left);
+  if (Number.isFinite(width) && width > 0) {
+    preview2DFrustumWidth = Math.max(10, Math.min(50000000, width));
+  }
+};
+
+const resolveFirstPersonCameraPosition = (viewer, Cesium, previousTarget, currentTarget, currentLocalFrame) => {
+  if (previewCameraFollowMode !== 'first' || !previousTarget || !viewer.camera.positionWC) {
+    const cartographic = Cesium.Cartographic.fromCartesian(currentTarget);
+    return Cesium.Cartesian3.fromRadians(
+      cartographic.longitude,
+      cartographic.latitude,
+      cartographic.height + 2
+    );
+  }
+
+  // 将相机在上一架无人机局部 ENU 坐标系中的偏移搬到新位置，
+  // 用户通过缩放控件或滚轮改变的距离不会被下一帧覆盖。
+  const previousFrame = Cesium.Transforms.eastNorthUpToFixedFrame(previousTarget);
+  const inversePreviousFrame = Cesium.Matrix4.inverseTransformation(previousFrame, new Cesium.Matrix4());
+  const localCameraOffset = Cesium.Matrix4.multiplyByPoint(
+    inversePreviousFrame,
+    viewer.camera.positionWC,
+    new Cesium.Cartesian3()
+  );
+  return Cesium.Matrix4.multiplyByPoint(
+    currentLocalFrame,
+    localCameraOffset,
+    new Cesium.Cartesian3()
+  );
+};
+
 const followPreviewCamera = (position, nextPosition, cameraState) => {
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
   if (!viewer || !Cesium) return;
+  const previousPreviewPosition = previewVisualPosition;
   const routeHeading = getPreviewHeading(position, nextPosition, Cesium);
   const heading = Number.isFinite(Number(cameraState?.yaw))
     ? Cesium.Math.toRadians(normalizeHeadingDegrees(cameraState.yaw))
@@ -2026,9 +2075,11 @@ const followPreviewCamera = (position, nextPosition, cameraState) => {
   if (previewHeadingEntity) previewHeadingEntity.show = showAircraftMarker;
 
   if (is2D) {
+    capture2DFrustumWidth(viewer);
     unlockPreviewCamera();
     const cartographic = Cesium.Cartographic.fromCartesian(position);
-    const viewHeight = Math.max(300, Number(viewer.camera.positionCartographic?.height) || 1000);
+    const viewHeight = preview2DFrustumWidth
+      || Math.max(10, Number(viewer.camera.positionCartographic?.height) || 1000);
     viewer.camera.setView({
       destination: Cesium.Cartesian3.fromRadians(
         cartographic.longitude,
@@ -2037,28 +2088,37 @@ const followPreviewCamera = (position, nextPosition, cameraState) => {
       ),
       orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 }
     });
+    previewCameraFollowMode = '2d';
     updatePreviewScreenRotation(viewer, Cesium);
     return;
   }
 
   if (previewViewMode.value === 'first') {
     unlockPreviewCamera();
-    const cartographic = Cesium.Cartographic.fromCartesian(position);
-    const eyePosition = Cesium.Cartesian3.fromRadians(
-      cartographic.longitude,
-      cartographic.latitude,
-      cartographic.height + 2
+    const eyePosition = resolveFirstPersonCameraPosition(
+      viewer,
+      Cesium,
+      previousPreviewPosition,
+      position,
+      localFrame
     );
     viewer.camera.setView({
       destination: eyePosition,
       orientation: { heading, pitch: 0, roll: 0 }
     });
+    previewCameraFollowMode = 'first';
   } else {
+    captureThirdPersonRange(viewer, Cesium, previousPreviewPosition);
     viewer.camera.lookAt(
       position,
-      new Cesium.HeadingPitchRange(heading, Cesium.Math.toRadians(-30), 100)
+      new Cesium.HeadingPitchRange(
+        heading,
+        Cesium.Math.toRadians(-30),
+        previewThirdPersonRange
+      )
     );
     unlockPreviewCamera();
+    previewCameraFollowMode = 'third';
   }
   updatePreviewScreenRotation(viewer, Cesium);
 };
