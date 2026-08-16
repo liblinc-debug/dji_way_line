@@ -22,7 +22,7 @@
       <div v-if="currentView === 'library'" class="flex h-full w-full">
         <div class="h-full w-[330px] shrink-0 border-r border-gray-200 bg-white shadow-lg pointer-events-auto">
           <MissionLibrary :missions="missions" :selected-id="previewMission?.id" @create="showCreateModal = true"
-            @select="handlePreviewMission" @edit="selectMission" @delete="deleteMission" @download="downloadKMZ"
+            @select="handlePreviewMission" @edit="selectMission" @delete="deleteMission" @download="downloadMission"
             @rename="renameMission"
             class="h-full" />
         </div>
@@ -67,7 +67,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { generateKMZ } from '../../utils/kmzGenerator';
-import { buildLocalWaylineResult, downloadWaylineBlob } from '../../utils/localWaylineFile';
+import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson } from '../../utils/localWaylineFile';
 import {
   getAircraftModelMeta,
   getV2CompatibleWaypointExportMeta
@@ -962,16 +962,27 @@ const renameMission = async ({ id, name }) => {
   await syncMissionToBackend(updatedMission);
 };
 
-const downloadKMZ = async (id) => {
+const downloadMission = async (payload) => {
+  const id = typeof payload === 'object' ? payload?.id : payload;
+  const format = typeof payload === 'object' ? payload?.format : 'kmz';
   const mission = missions.value.find(m => m.id === id);
   if (!mission) return;
 
   try {
+    const normalizedMission = {
+      ...mission,
+      config: normalizeMissionConfig(mission.config),
+      coordinateSystem: MISSION_COORDINATE_SYSTEM
+    };
+    if (format === 'json') {
+      downloadWaylineJson(normalizedMission, mission.name);
+      return;
+    }
     const waypoints = mission.waypoints || [];
-    const blob = await generateKMZ(normalizeMissionConfig(mission.config), waypoints, null);
+    const blob = await generateKMZ(normalizedMission.config, waypoints, null);
     downloadWaylineBlob(blob, mission.name);
   } catch (error) {
-    console.error('Failed to generate KMZ', error);
+    console.error(`Failed to download ${format.toUpperCase()}`, error);
   }
 };
 </script>

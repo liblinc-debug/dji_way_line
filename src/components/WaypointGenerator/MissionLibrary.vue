@@ -49,9 +49,17 @@
                   title="编辑航线名称" @click.stop="startRename(item)">✏️</a-button>
               </div>
               <div v-if="editingMissionId !== item.id" class="flex gap-1 flex-none">
-                <a-button type="text" size="small" class="!px-1 !h-6" @click.stop="$emit('download', item.id)">
-                  <span class="text-xs">下载</span>
-                </a-button>
+                <a-dropdown :trigger="['click']">
+                  <a-button type="text" size="small" class="!px-1 !h-6" @click.stop>
+                    <span class="text-xs">下载⌄</span>
+                  </a-button>
+                  <template #overlay>
+                    <a-menu @click="handleDownloadMenuClick($event, item.id)">
+                      <a-menu-item key="kmz">下载 KMZ</a-menu-item>
+                      <a-menu-item key="json">下载 JSON</a-menu-item>
+                    </a-menu>
+                  </template>
+                </a-dropdown>
                 <a-button type="text" size="small" class="!px-1 !h-6" @click.stop="$emit('edit', item.id)">
                   <span class="text-xs">编辑</span>
                 </a-button>
@@ -129,6 +137,10 @@ const confirmRename = (id) => {
   if (!name) return;
   emit('rename', { id, name });
   cancelRename();
+};
+
+const handleDownloadMenuClick = ({ key }, id) => {
+  emit('download', { id, format: key });
 };
 
 const modelFilterOptions = computed(() => {

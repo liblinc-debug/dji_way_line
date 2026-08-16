@@ -11,7 +11,15 @@
                 </div>
                 <div class="flex gap-2">
                     <a-button size="small" @click="$emit('back')">返回</a-button>
-                    <a-button size="small" @click="downloadKMZ">生成 KMZ</a-button>
+                    <a-dropdown :trigger="['click']">
+                        <a-button size="small">下载⌄</a-button>
+                        <template #overlay>
+                            <a-menu>
+                                <a-menu-item key="kmz" @click="downloadKMZ">下载 KMZ</a-menu-item>
+                                <a-menu-item key="json" @click="downloadJSON">下载 JSON</a-menu-item>
+                            </a-menu>
+                        </template>
+                    </a-dropdown>
                     <a-button size="small" type="primary" @click="saveMission">保存</a-button>
                 </div>
             </div>
@@ -331,7 +339,7 @@ import * as turf from '@turf/turf';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ACTION_TYPE, DEFAULT_ACTION_PARAMS } from '../../../types/waypointRoute.js';
 import { generateKMZ } from '../../../utils/kmzGenerator';
-import { buildLocalWaylineResult, downloadWaylineBlob } from '../../../utils/localWaylineFile';
+import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson } from '../../../utils/localWaylineFile';
 import CameraPreview from '../pro/CameraPreview.vue';
 import MissionConfig from '../pro/MissionConfigPro.vue';
 import WaypointList from '../pro/WaypointListPro.vue';
@@ -1129,6 +1137,23 @@ const downloadKMZ = async () => {
             message: error?.message || '生成 KMZ 失败'
         });
     }
+};
+
+const downloadJSON = () => {
+    const missionName = missionConfig.value.missionName || props.initialMission?.name || 'wayline';
+    downloadWaylineJson({
+        ...(props.initialMission || {}),
+        id: props.initialMission?.id,
+        name: missionName,
+        coordinateSystem: 'WGS84',
+        config: {
+            ...missionConfig.value,
+            missionName,
+            routeType: 'waypoint'
+        },
+        waypoints: waypoints.value,
+        updatedAt: Date.now()
+    }, missionName);
 };
 
 defineExpose({
