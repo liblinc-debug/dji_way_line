@@ -4,6 +4,7 @@
     <div class="absolute inset-0 z-[1] bg-gray-100" :class="mapLayoutClass">
       <MapViewer ref="mapRef" :waypoints="activeMapData.waypoints" :route-type="activeMapData.routeType"
         :execute-height-mode="activeMapData.executeHeightMode"
+        :obstacle-avoidance="activeMapData.obstacleAvoidance"
         :is-patrol-mode="false"
         :scan-path="activeMapData.scanPath" :coverage-area="activeMapData.coverageArea"
         :cutting-segments="activeMapData.cuttingSegments" :is-closed-loop="activeMapData.isClosedLoop"
@@ -74,6 +75,7 @@ import {
 } from '../../constants/aircraftModels.js';
 import { mergeDerivedRequirements, normalizeRouteLinking } from '../../utils/routeLinking.js';
 import { gcj02ToWgs84 } from '../../utils/coordTransform.js';
+import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import CreateMissionModal from './CreateMissionModal.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
@@ -184,7 +186,13 @@ const toBackendTaskRequest = (mission = {}) => {
     policies: {
       lostLink: String(config.exitOnRCLost || ''),
       lowBattery: '',
-      geoFence: ''
+      geoFence: '',
+      obstacleAvoidance: {
+        ...OBSTACLE_AVOIDANCE_DEFAULT,
+        ...(config.obstacleAvoidance || {}),
+        enabled: config.useObstacleAvoidance !== false
+          && config.obstacleAvoidance?.enabled !== false
+      }
     }
   };
 };
@@ -347,27 +355,37 @@ const usesReferenceWaypointExport = (routeType) => {
 };
 
 const normalizeMissionConfig = (config = {}) => {
-  const modelMeta = getAircraftModelMeta(config.aircraftModel);
+  const normalizedConfig = {
+    ...config,
+    useObstacleAvoidance: config.useObstacleAvoidance !== false,
+    obstacleAvoidance: {
+      ...OBSTACLE_AVOIDANCE_DEFAULT,
+      ...(config.obstacleAvoidance || {}),
+      enabled: config.useObstacleAvoidance !== false
+        && config.obstacleAvoidance?.enabled !== false
+    }
+  };
+  const modelMeta = getAircraftModelMeta(normalizedConfig.aircraftModel);
   if (!modelMeta) {
     return {
-      ...config,
+      ...normalizedConfig,
       routeType: 'waypoint',
       routeLinking: mergeDerivedRequirements({
-        ...config,
-        routeLinking: normalizeRouteLinking(config)
+        ...normalizedConfig,
+        routeLinking: normalizeRouteLinking(normalizedConfig)
       })
     };
   }
 
-  const exportMeta = getV2CompatibleWaypointExportMeta(config.aircraftModel);
+  const exportMeta = getV2CompatibleWaypointExportMeta(normalizedConfig.aircraftModel);
 
   return {
-    ...config,
+    ...normalizedConfig,
     routeType: 'waypoint',
-    aircraftSeries: config.aircraftSeries || modelMeta.aircraftSeries,
+    aircraftSeries: normalizedConfig.aircraftSeries || modelMeta.aircraftSeries,
     routeLinking: mergeDerivedRequirements({
-      ...config,
-      routeLinking: normalizeRouteLinking(config)
+      ...normalizedConfig,
+      routeLinking: normalizeRouteLinking(normalizedConfig)
     }),
     ...exportMeta
   };
@@ -444,6 +462,7 @@ const activeMapData = computed(() => {
     isClosedLoop: false,
     selectedWpIndex: -1,
     executeHeightMode: 'relativeToStartPoint',
+    obstacleAvoidance: { ...OBSTACLE_AVOIDANCE_DEFAULT },
     takeoffPoint: { lat: 0, lng: 0, height: 0 },
     activeRegionId: 1,
     leftOverlayOffset: currentView.value === 'editor' ? 420 : 330
@@ -467,6 +486,12 @@ const activeMapData = computed(() => {
     isClosedLoop: m.config?.isClosedLoop || false,
     selectedWpIndex: m._selectedWpIndex ?? -1,
     executeHeightMode: m.config?.executeHeightMode || 'relativeToStartPoint',
+    obstacleAvoidance: {
+      ...OBSTACLE_AVOIDANCE_DEFAULT,
+      ...(m.config?.obstacleAvoidance || {}),
+      enabled: m.config?.useObstacleAvoidance !== false
+        && m.config?.obstacleAvoidance?.enabled !== false
+    },
     takeoffPoint: m.config?.takeoffPoint || { lat: m.config?.takeOffPointLat, lng: m.config?.takeOffPointLng, height: m.config?.takeOffPointHeight || 0 },
     activeRegionId: 1,
     leftOverlayOffset: currentView.value === 'editor' ? 420 : 330
@@ -483,6 +508,9 @@ const activeMapData = computed(() => {
     const sameClosedLoop = cached.isClosedLoop === newData.isClosedLoop;
     const sameSelectedIndex = cached.selectedWpIndex === newData.selectedWpIndex;
     const sameExecuteHeightMode = cached.executeHeightMode === newData.executeHeightMode;
+    const sameObstacleAvoidance = Object.keys(OBSTACLE_AVOIDANCE_DEFAULT).every(
+      key => cached.obstacleAvoidance?.[key] === newData.obstacleAvoidance?.[key]
+    );
     const sameActiveRegionId = cached.activeRegionId === newData.activeRegionId;
     const sameLeftOverlayOffset = cached.leftOverlayOffset === newData.leftOverlayOffset;
     const sameTakeoffPoint = cached.takeoffPoint?.lat === newData.takeoffPoint?.lat
@@ -498,6 +526,7 @@ const activeMapData = computed(() => {
       && sameClosedLoop
       && sameSelectedIndex
       && sameExecuteHeightMode
+      && sameObstacleAvoidance
       && sameActiveRegionId
       && sameLeftOverlayOffset
       && sameTakeoffPoint

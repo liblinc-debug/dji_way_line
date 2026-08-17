@@ -25,9 +25,9 @@
             </div>
 
             <div class="flex-1 min-h-0 overflow-hidden">
-                <a-tabs v-model:activeKey="leftTabActiveKey" class="h-full dji-tabs">
-                <a-tab-pane key="list" tab="航点列表">
-                    <div class="h-full overflow-y-auto custom-scrollbar p-3">
+                <a-tabs v-model:activeKey="leftTabActiveKey" class="h-full min-h-0 dji-tabs">
+                <a-tab-pane key="list" tab="航点列表" class="h-full min-h-0 overflow-hidden">
+                    <div class="h-full min-h-0 overflow-y-auto overscroll-contain custom-scrollbar p-3">
                         <WaypointList :waypoints="waypoints" :selected-wp-index="selectedWpIndex"
                             :selected-action-index="selectedActionIndex" @update:waypoints="waypoints = $event"
                             @remove="removeWaypoint" @clear="clearWaypoints" @reverse="reverseWaypoints"
@@ -36,8 +36,8 @@
                             @remove-action="handleRemoveAction" />
                     </div>
                 </a-tab-pane>
-                <a-tab-pane key="config" tab="任务配置">
-                    <div class="h-full overflow-y-auto custom-scrollbar p-0 bg-white text-gray-900">
+                <a-tab-pane key="config" tab="任务配置" class="h-full min-h-0 overflow-hidden">
+                    <div class="h-full min-h-0 overflow-y-auto overscroll-contain custom-scrollbar p-0 bg-white text-gray-900">
                         <MissionConfig v-model="missionConfig" @reset-takeoff="isSettingTakeoffPoint = true" />
                     </div>
                 </a-tab-pane>
@@ -338,6 +338,7 @@
 import * as turf from '@turf/turf';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ACTION_TYPE, DEFAULT_ACTION_PARAMS } from '../../../types/waypointRoute.js';
+import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../../types/missionConfig.js';
 import { generateKMZ } from '../../../utils/kmzGenerator';
 import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson } from '../../../utils/localWaylineFile';
 import CameraPreview from '../pro/CameraPreview.vue';
@@ -375,7 +376,11 @@ const missionConfig = ref({
     gimbalPitchMode: 'manual',
     finishAction: 'goHome',
     useObstacleAvoidance: true,
-    ...props.initialMission.config
+    ...props.initialMission.config,
+    obstacleAvoidance: {
+        ...OBSTACLE_AVOIDANCE_DEFAULT,
+        ...(props.initialMission.config?.obstacleAvoidance || {})
+    }
 });
 const waypoints = ref([...(props.initialMission.waypoints || [])]);
 const mapViewerRef = ref(null);
@@ -1217,12 +1222,48 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
+    width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f5f9;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #ddd;
-    border-radius: 2px;
+    background: #b8c2cf;
+    border: 2px solid #f1f5f9;
+    border-radius: 999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #8f9baa;
+}
+
+.custom-scrollbar {
+    scrollbar-color: #b8c2cf #f1f5f9;
+    scrollbar-width: thin;
+}
+
+.dji-tabs {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.dji-tabs :deep(.ant-tabs-nav) {
+    flex: none;
+}
+
+.dji-tabs :deep(.ant-tabs-content-holder) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.dji-tabs :deep(.ant-tabs-content),
+.dji-tabs :deep(.ant-tabs-tabpane) {
+    height: 100%;
+    min-height: 0;
 }
 
 .dji-tabs :deep(.ant-tabs-nav) {

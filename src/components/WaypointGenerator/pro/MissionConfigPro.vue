@@ -209,6 +209,136 @@
                 </div>
             </a-form-item>
 
+            <!-- Section: Obstacle Avoidance Policy -->
+            <a-form-item class="!mb-4">
+                <template #label><span
+                        class="text-[11px] font-black text-gray-400 uppercase tracking-widest">避障规则</span></template>
+                <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <div class="flex items-center justify-between border-b border-gray-100 bg-gray-50/60 px-3 py-3">
+                        <div>
+                            <div class="text-[11px] font-bold text-gray-700">启用任务避障</div>
+                            <div class="mt-0.5 text-[9px] text-gray-400">实际执行依赖飞机传感器、飞控及当前飞行模式</div>
+                        </div>
+                        <a-switch :checked="obstacleConfig.enabled" size="small"
+                            @update:checked="updateObstacleEnabled" />
+                    </div>
+
+                    <div v-if="obstacleConfig.enabled" class="space-y-3 p-3">
+                        <div>
+                            <div class="mb-1 text-[10px] font-bold text-gray-500">避障策略</div>
+                            <a-select :value="obstacleConfig.strategy" size="small" class="w-full"
+                                @update:value="val => updateObstacleConfig('strategy', val)">
+                                <a-select-option v-for="strategy in obstacleStrategies" :key="strategy.value"
+                                    :value="strategy.value">
+                                    {{ strategy.label }} · {{ strategy.algorithm }}
+                                </a-select-option>
+                            </a-select>
+                        </div>
+
+                        <div class="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2">
+                            <div class="text-[10px] font-bold text-blue-700">{{ selectedObstacleStrategy.label }}</div>
+                            <div class="mt-1 text-[9px] leading-4 text-blue-600/80">
+                                {{ selectedObstacleStrategy.description }}
+                            </div>
+                        </div>
+
+                        <template v-if="obstacleConfig.strategy === 'vertical-overfly'">
+                            <div>
+                                <div class="mb-1 text-[10px] font-bold text-gray-500">垂直升高方式</div>
+                                <a-radio-group :value="obstacleConfig.altitudeMode" button-style="solid"
+                                    class="flex w-full dji-radio-unified"
+                                    @update:value="val => updateObstacleConfig('altitudeMode', val)">
+                                    <a-radio-button value="fixed" class="flex-1 text-center text-[10px]">固定升高</a-radio-button>
+                                    <a-radio-button value="auto" class="flex-1 text-center text-[10px]">自动越障</a-radio-button>
+                                </a-radio-group>
+                            </div>
+
+                            <div v-if="obstacleConfig.altitudeMode === 'fixed'"
+                                class="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-2.5">
+                                <div>
+                                    <div class="text-[10px] font-bold text-gray-600">垂直升高高度</div>
+                                    <div class="text-[8px] text-gray-400">原地直上，安全飞越后原地直下</div>
+                                </div>
+                                <div class="flex items-center gap-1.5">
+                                    <a-input-number :value="obstacleConfig.fixedClimbHeight" size="small" :min="5"
+                                        :max="200" :step="5"
+                                        @update:value="val => updateObstacleNumber('fixedClimbHeight', val, 5, 200)"
+                                        class="!w-20" />
+                                    <span class="text-[9px] text-gray-400">m</span>
+                                </div>
+                            </div>
+
+                            <div v-else
+                                class="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-2.5">
+                                <div>
+                                    <div class="text-[10px] font-bold text-gray-600">障碍顶部安全余量</div>
+                                    <div class="text-[8px] text-gray-400">依据建筑/传感器高度自动爬升</div>
+                                </div>
+                                <div class="flex items-center gap-1.5">
+                                    <a-input-number :value="obstacleConfig.verticalClearance" size="small" :min="2"
+                                        :max="50" :step="1"
+                                        @update:value="val => updateObstacleNumber('verticalClearance', val, 2, 50)"
+                                        class="!w-20" />
+                                    <span class="text-[9px] text-gray-400">m</span>
+                                </div>
+                            </div>
+                        </template>
+
+                        <div v-if="['horizontal-bypass', 'global-local-replan'].includes(obstacleConfig.strategy)"
+                            class="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/50 p-2.5">
+                            <div>
+                                <div class="text-[10px] font-bold text-gray-600">水平安全间距</div>
+                                <div class="text-[8px] text-gray-400">规划路径与障碍物的最小距离</div>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <a-input-number :value="obstacleConfig.horizontalClearance" size="small" :min="1"
+                                    :max="30" :step="1"
+                                    @update:value="val => updateObstacleNumber('horizontalClearance', val, 1, 30)"
+                                    class="!w-20" />
+                                <span class="text-[9px] text-gray-400">m</span>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="rounded-lg border border-gray-100 bg-gray-50/50 p-2">
+                                <div class="mb-1 text-[9px] font-bold text-gray-500">前视探测距离</div>
+                                <div class="flex items-center gap-1">
+                                    <a-input-number :value="obstacleConfig.lookaheadDistance" size="small" :min="1"
+                                        :max="100" :step="1"
+                                        @update:value="val => updateObstacleNumber('lookaheadDistance', val, 1, 100)"
+                                        class="!w-full" />
+                                    <span class="text-[9px] text-gray-400">m</span>
+                                </div>
+                            </div>
+                            <div class="rounded-lg border border-gray-100 bg-gray-50/50 p-2">
+                                <div class="mb-1 text-[9px] font-bold text-gray-500">等待超时</div>
+                                <div class="flex items-center gap-1">
+                                    <a-input-number :value="obstacleConfig.maxWaitSeconds" size="small" :min="5"
+                                        :max="300" :step="5"
+                                        @update:value="val => updateObstacleNumber('maxWaitSeconds', val, 5, 300)"
+                                        class="!w-full" />
+                                    <span class="text-[9px] text-gray-400">s</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="mb-1 text-[10px] font-bold text-gray-500">避障失败动作</div>
+                            <a-select :value="obstacleConfig.fallbackAction" size="small" class="w-full"
+                                @update:value="val => updateObstacleConfig('fallbackAction', val)">
+                                <a-select-option value="hover">悬停等待人工处理</a-select-option>
+                                <a-select-option value="goHome">返航</a-select-option>
+                                <a-select-option value="abort">终止任务并保持当前位置</a-select-option>
+                            </a-select>
+                        </div>
+
+                        <div class="rounded-lg bg-amber-50 px-2.5 py-2 text-[9px] leading-4 text-amber-700">
+                            首次使用或更换传感器后，应先在仿真和低速空旷环境验证。缺少全向感知时，不应假定未覆盖方向不存在障碍。
+                        </div>
+                    </div>
+                </div>
+            </a-form-item>
+
             <a-collapse v-model:activeKey="activeCollapse" :bordered="false" class="dji-collapse-unified bg-white">
                 <a-collapse-panel key="1">
                     <template #header><span
@@ -223,11 +353,6 @@
                                 <span class="text-[10px] text-gray-400 font-bold">m/s</span>
                             </div>
                         </div>
-                        <div class="flex justify-between items-center px-1">
-                            <span class="text-[11px] text-gray-500 font-bold">自动避障</span>
-                            <a-switch :checked="modelValue.useObstacleAvoidance"
-                                @update:checked="val => updateConfig('useObstacleAvoidance', val)" size="small" />
-                        </div>
                     </div>
                 </a-collapse-panel>
             </a-collapse>
@@ -237,6 +362,10 @@
 
 <script setup>
 import { computed, ref } from 'vue';
+import {
+    OBSTACLE_AVOIDANCE_DEFAULT,
+    OBSTACLE_AVOIDANCE_STRATEGIES
+} from '../../../types/missionConfig.js';
 
 const props = defineProps({
     modelValue: {
@@ -247,12 +376,52 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'reset-takeoff']);
 const activeCollapse = ref([]);
+const obstacleStrategies = OBSTACLE_AVOIDANCE_STRATEGIES;
+
+const obstacleConfig = computed(() => ({
+    ...OBSTACLE_AVOIDANCE_DEFAULT,
+    ...(props.modelValue?.obstacleAvoidance || {}),
+    enabled: props.modelValue?.useObstacleAvoidance !== false
+        && props.modelValue?.obstacleAvoidance?.enabled !== false
+}));
+
+const selectedObstacleStrategy = computed(() => (
+    obstacleStrategies.find(item => item.value === obstacleConfig.value.strategy)
+    || obstacleStrategies[0]
+));
 
 const getClimbModeByFlyToWaylineMode = (mode) => mode === 'pointToPoint' ? 'oblique' : 'vertical';
 const getFlyToWaylineModeByClimbMode = (mode) => mode === 'oblique' ? 'pointToPoint' : 'safely';
 
 const updateConfig = (key, value) => {
     emit('update:modelValue', { ...props.modelValue, [key]: value });
+};
+
+const updateObstacleConfig = (key, value) => {
+    emit('update:modelValue', {
+        ...props.modelValue,
+        obstacleAvoidance: {
+            ...obstacleConfig.value,
+            [key]: value
+        }
+    });
+};
+
+const updateObstacleEnabled = (enabled) => {
+    emit('update:modelValue', {
+        ...props.modelValue,
+        useObstacleAvoidance: enabled,
+        obstacleAvoidance: {
+            ...obstacleConfig.value,
+            enabled
+        }
+    });
+};
+
+const updateObstacleNumber = (key, value, min, max) => {
+    const numericValue = Number(value);
+    const fallback = Number(obstacleConfig.value[key]) || min;
+    updateObstacleConfig(key, Math.max(min, Math.min(max, Number.isFinite(numericValue) ? numericValue : fallback)));
 };
 
 const resolvedClimbMode = computed(() => {

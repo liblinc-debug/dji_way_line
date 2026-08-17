@@ -571,7 +571,7 @@
       <div class="flex items-center justify-between gap-3">
         <div>
           <div class="text-sm font-bold">航线贴楼飞行预览</div>
-          <div class="mt-0.5 text-[10px] text-gray-400">固定间距重采样建筑表面，预览数据不会修改导出航点</div>
+          <div class="mt-0.5 text-[10px] text-gray-400">走廊精细采样，按“直上 → 平飞 → 直下”越障；不会修改导出航点</div>
         </div>
         <button
           type="button"
@@ -601,7 +601,8 @@
           <div class="rounded bg-white/5 px-1 py-1.5"><div class="text-[9px] text-gray-400">速度</div><div class="font-mono text-xs">{{ previewSpeed }}m/s</div></div>
         </div>
         <div v-if="previewAltitudeAdjustedCount > 0" class="mt-2 rounded bg-amber-400/10 px-2 py-1.5 text-[11px] text-amber-100">
-          {{ previewAltitudeModeLabel }}：检测到 {{ previewAltitudeAdjustedCount }} 个采样点低于建筑安全高度，最大自动抬升 {{ previewMaxAltitudeAdjustment.toFixed(1) }}m。
+          {{ previewAltitudeModeLabel }}：检测到 {{ previewAltitudeAdjustedCount }} 个风险采样点，已合并生成
+          {{ previewAvoidanceSegmentCount }} 段垂直越障航迹，最大抬升 {{ previewMaxAltitudeAdjustment.toFixed(1) }}m。
         </div>
         <div v-else class="mt-2 rounded bg-emerald-400/10 px-2 py-1.5 text-[11px] text-emerald-100">
           {{ previewAltitudeModeLabel }}：模拟飞行高度与规划高度一致。
@@ -662,8 +663,10 @@
 <script setup>
 import { computed, markRaw, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ACTION_TYPE } from '../../types/waypointRoute.js';
+import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
 import { createDronePreviewIcons } from '../../utils/dronePreviewIcon.js';
+import { buildVerticalAvoidanceProfile } from '../../utils/verticalAvoidance.js';
 import { PLANE_SVG } from './constants';
 
 // --- 1. Props & Emits ---
@@ -677,6 +680,7 @@ const props = defineProps({
   routeType: { type: String, default: 'waypoint' },
   selectedWpIndex: { type: Number, default: -1 },
   executeHeightMode: { type: String, default: 'relativeToStartPoint' },
+  obstacleAvoidance: { type: Object, default: () => ({ ...OBSTACLE_AVOIDANCE_DEFAULT }) },
   takeoffPoint: { type: Object, default: null },
   activeRegionId: { type: Number, default: 1 },
   stripRouteMode: { type: String, default: 'zigzag' },
@@ -716,6 +720,7 @@ const previewViewMode = ref('third');
 const previewTotalDistance = ref(0);
 const previewAltitudeAdjustedCount = ref(0);
 const previewMaxAltitudeAdjustment = ref(0);
+const previewAvoidanceSegmentCount = ref(0);
 
 let mapSwitchSequence = 0;
 let buildingTileset = null;
@@ -813,6 +818,10 @@ const previewAltitudeModeLabel = computed(() => (
     ? '实时仿地高度'
     : (props.executeHeightMode === 'WGS84' ? 'WGS84 绝对高度' : '相对起飞点高度')
 ));
+const resolvedObstacleAvoidance = computed(() => ({
+  ...OBSTACLE_AVOIDANCE_DEFAULT,
+  ...(props.obstacleAvoidance || {})
+}));
 const previewFocalLength = computed(() => 24 * previewZoomFactor.value);
 
 // --- 3. Computed Properties ---
@@ -1451,8 +1460,9 @@ const relHeightLabelPosition = computed(() => {
 
 // --- 4. Methods ---
 const ARCGIS_WORLD_IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer';
-const ROUTE_SAMPLE_SPACING_METERS = 20;
+const ROUTE_SAMPLE_SPACING_METERS = 5;
 const ROUTE_CLEARANCE_METERS = 20;
+const ROUTE_CORRIDOR_MIN_RADIUS_METERS = 3;
 
 const waitForNextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -1650,6 +1660,7 @@ const invalidateRoutePreview = () => {
   previewTotalDistance.value = 0;
   previewAltitudeAdjustedCount.value = 0;
   previewMaxAltitudeAdjustment.value = 0;
+  previewAvoidanceSegmentCount.value = 0;
   previewProgress.value = 0;
   previewFinished.value = false;
   previewError.value = '';
@@ -1759,6 +1770,70 @@ const flyCameraToRoute = (cartographics, Cesium, viewer) => new Promise((resolve
   });
 });
 
+const sampleRouteCorridorHeights = async (cartographics, Cesium, viewer) => {
+  const configuredRadius = Number(resolvedObstacleAvoidance.value.horizontalClearance);
+  const corridorRadius = Math.max(
+    ROUTE_CORRIDOR_MIN_RADIUS_METERS,
+    Number.isFinite(configuredRadius) ? configuredRadius : ROUTE_CORRIDOR_MIN_RADIUS_METERS
+  );
+  const localOffsets = [
+    [0, 0],
+    [corridorRadius, 0],
+    [-corridorRadius, 0],
+    [0, corridorRadius],
+    [0, -corridorRadius]
+  ];
+  const corridorGroups = cartographics.map((cartographic) => {
+    const center = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
+    const localFrame = Cesium.Transforms.eastNorthUpToFixedFrame(center);
+    return localOffsets.map(([east, north]) => {
+      const worldPoint = Cesium.Matrix4.multiplyByPoint(
+        localFrame,
+        new Cesium.Cartesian3(east, north, 0),
+        new Cesium.Cartesian3()
+      );
+      const offsetCartographic = Cesium.Cartographic.fromCartesian(worldPoint);
+      offsetCartographic.height = 0;
+      return offsetCartographic;
+    });
+  });
+  const sampledCorridor = await viewer.scene.sampleHeightMostDetailed(corridorGroups.flat());
+  const pointsPerGroup = localOffsets.length;
+
+  return corridorGroups.map((group, groupIndex) => {
+    const heights = group.map((fallbackPoint, pointIndex) => {
+      const sampledPoint = sampledCorridor[groupIndex * pointsPerGroup + pointIndex] || fallbackPoint;
+      if (Number.isFinite(sampledPoint?.height)) return Number(sampledPoint.height);
+      return Number(viewer.scene.globe.getHeight(sampledPoint || fallbackPoint)) || 0;
+    });
+    return Math.max(0, ...heights);
+  });
+};
+
+const buildAvoidanceSamples = (resamplePlan, surfaceHeights, Cesium) => {
+  let cumulativeDistance = 0;
+  return resamplePlan.map((plan, index) => {
+    if (index > 0) {
+      const geodesic = new Cesium.EllipsoidGeodesic(
+        resamplePlan[index - 1].cartographic,
+        plan.cartographic
+      );
+      cumulativeDistance += Number(geodesic.surfaceDistance) || 0;
+    }
+    const plannedAltitude = Number(plan.plannedAbsoluteAltitude);
+    const surfaceHeight = Number(surfaceHeights[index]) || 0;
+    return {
+      cartographic: plan.cartographic,
+      distance: cumulativeDistance,
+      baselineAltitude: Number.isFinite(plannedAltitude)
+        ? plannedAltitude
+        : surfaceHeight + ROUTE_CLEARANCE_METERS,
+      surfaceHeight,
+      cameraState: plan.cameraState
+    };
+  });
+};
+
 const rebuildPreviewDistances = (Cesium) => {
   previewCumulativeDistances = [0];
   for (let index = 1; index < previewPath.length; index += 1) {
@@ -1794,43 +1869,38 @@ const prepareRoutePreview = async () => {
     viewer.scene.requestRender();
     await waitForNextFrame();
 
-    let sampled;
+    let sampledSurfaceHeights;
     try {
-      sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
+      sampledSurfaceHeights = await sampleRouteCorridorHeights(cartographics, Cesium, viewer);
     } finally {
       visibleEntities.forEach((entity) => { entity.show = true; });
     }
 
-    let adjustedCount = 0;
-    let maxAdjustment = 0;
-    const sampledSurfaceHeights = [];
-    previewPath = sampled.map((point, index) => {
-      const sampledHeight = Number.isFinite(point.height)
-        ? point.height
-        : (viewer.scene.globe.getHeight(point) || 0);
-      sampledSurfaceHeights.push(sampledHeight);
-      const plan = resamplePlan[index];
-      const plannedAltitude = props.executeHeightMode === 'realTimeFollowSurface'
-        ? sampledHeight + Number(plan?.plannedSurfaceOffset || 0)
-        : Number(plan?.plannedAbsoluteAltitude);
-      const safeAltitude = sampledHeight + ROUTE_CLEARANCE_METERS;
-      const resolvedPlannedAltitude = Number.isFinite(plannedAltitude) ? plannedAltitude : safeAltitude;
-      const previewAltitude = Math.max(resolvedPlannedAltitude, safeAltitude);
-      const adjustment = Math.max(0, previewAltitude - resolvedPlannedAltitude);
-      if (adjustment > 0.05) {
-        adjustedCount += 1;
-        maxAdjustment = Math.max(maxAdjustment, adjustment);
-      }
-      return markRaw(Cesium.Cartesian3.fromRadians(
-        point.longitude,
-        point.latitude,
-        previewAltitude
-      ));
-    });
-    previewCameraStates = resamplePlan.map((sample) => sample.cameraState);
-    previewSurfaceHeights = sampledSurfaceHeights;
-    previewAltitudeAdjustedCount.value = adjustedCount;
-    previewMaxAltitudeAdjustment.value = maxAdjustment;
+    const avoidanceSamples = buildAvoidanceSamples(resamplePlan, sampledSurfaceHeights, Cesium);
+    const avoidanceEnabled = resolvedObstacleAvoidance.value.enabled !== false;
+    const avoidanceProfile = avoidanceEnabled
+      ? buildVerticalAvoidanceProfile(avoidanceSamples, resolvedObstacleAvoidance.value)
+      : {
+          points: avoidanceSamples.map(sample => ({
+            ...sample,
+            altitude: sample.baselineAltitude,
+            stage: 'planned'
+          })),
+          obstacleSampleCount: 0,
+          avoidanceSegmentCount: 0,
+          maxAltitudeAdjustment: 0
+        };
+
+    previewPath = avoidanceProfile.points.map((point) => markRaw(Cesium.Cartesian3.fromRadians(
+      point.cartographic.longitude,
+      point.cartographic.latitude,
+      point.altitude
+    )));
+    previewCameraStates = avoidanceProfile.points.map(point => point.cameraState);
+    previewSurfaceHeights = avoidanceProfile.points.map(point => point.surfaceHeight);
+    previewAltitudeAdjustedCount.value = avoidanceProfile.obstacleSampleCount;
+    previewAvoidanceSegmentCount.value = avoidanceProfile.avoidanceSegmentCount;
+    previewMaxAltitudeAdjustment.value = avoidanceProfile.maxAltitudeAdjustment;
 
     rebuildPreviewDistances(Cesium);
     if (previewPath.length < 2 || previewTotalDistance.value <= 0) {
@@ -1842,6 +1912,7 @@ const prepareRoutePreview = async () => {
       polyline: {
         positions: previewPath,
         width: 5,
+        arcType: Cesium.ArcType.NONE,
         material: new Cesium.PolylineGlowMaterialProperty({
           color: Cesium.Color.CYAN.withAlpha(0.9),
           glowPower: 0.22
@@ -2661,7 +2732,9 @@ watch(
         zoom ?? ''
       ].join(',');
     })
-    .join('|') + `|${props.executeHeightMode}|${Number(props.takeoffPoint?.asl || props.takeoffPoint?.height || 0).toFixed(2)}`,
+    .join('|')
+      + `|${props.executeHeightMode}|${Number(props.takeoffPoint?.asl || props.takeoffPoint?.height || 0).toFixed(2)}`
+      + `|${Object.keys(OBSTACLE_AVOIDANCE_DEFAULT).map(key => String(props.obstacleAvoidance?.[key] ?? '')).join(',')}`,
   (signature, previousSignature) => {
     if (previousSignature !== undefined && signature !== previousSignature && previewReady.value) {
       invalidateRoutePreview();
