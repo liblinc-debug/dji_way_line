@@ -1,5 +1,5 @@
 <template>
-  <div class="relative w-full h-full">
+  <div ref="mapRootRef" tabindex="0" class="relative w-full h-full outline-none" @pointerdown="focusManualFlightInput">
     <vc-viewer @ready="onViewerReadyInternal" v-model:camera="camera" :scene-mode="sceneMode" @left-click="onMapClick"
       :access-token="cesiumAccessToken" :animation="false" :timeline="false" :base-layer-picker="false"
       :fullscreen-button="false" :scene-mode-picker="false" :info-box="false" :selection-indicator="false"
@@ -635,12 +635,14 @@
           max="100"
           step="0.1"
           :value="previewProgress"
+          :disabled="previewViewMode === 'manual'"
           @input="seekRoutePreview($event.target.value)"
         />
 
         <div class="mt-2 flex items-center gap-2">
-          <button type="button" class="rounded bg-emerald-500 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-400" @click="toggleRoutePreview">
-            {{ previewPlaying ? '暂停' : (previewFinished ? '回放' : '播放') }}
+          <button type="button" class="rounded bg-emerald-500 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="previewViewMode === 'manual'" @click="toggleRoutePreview">
+            {{ previewViewMode === 'manual' ? '手动控制中' : (previewPlaying ? '暂停' : (previewFinished ? '回放' : '播放')) }}
           </button>
           <button type="button" class="rounded bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20" @click="resetRoutePreview">回到起点</button>
           <select v-model.number="previewSpeed" class="rounded border border-white/20 bg-black/50 px-2 py-1.5 text-xs text-white outline-none">
@@ -653,7 +655,29 @@
           <select v-model="previewViewMode" class="ml-auto rounded border border-white/20 bg-black/50 px-2 py-1.5 text-xs text-white outline-none">
             <option value="first">第一人称</option>
             <option value="third">第三人称</option>
+            <option value="manual">手动飞行</option>
           </select>
+        </div>
+
+        <div v-if="previewViewMode === 'manual'"
+          class="mt-3 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-[10px] text-sky-50 shadow-inner">
+          <div class="flex items-center justify-between gap-3">
+            <span class="font-bold text-sky-200">手动飞行键盘控制</span>
+            <span class="font-mono text-sky-100">{{ manualFlightStatusLabel }}</span>
+          </div>
+          <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <span><kbd>W</kbd> 升高</span>
+            <span><kbd>S</kbd> 降低</span>
+            <span><kbd>A</kbd> 向左转向</span>
+            <span><kbd>D</kbd> 向右转向</span>
+            <span><kbd>↑</kbd> 前进</span>
+            <span><kbd>↓</kbd> 后退</span>
+            <span><kbd>←</kbd> 左飞</span>
+            <span><kbd>→</kbd> 右飞</span>
+          </div>
+          <div class="mt-2 border-t border-sky-200/15 pt-1.5 text-sky-100/75">
+            可组合按键连续飞行；点击地图后即可操作。接近建筑时将保持配置的顶部安全余量。
+          </div>
         </div>
       </template>
     </div>
@@ -661,7 +685,7 @@
 </template>
 
 <script setup>
-import { computed, markRaw, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ACTION_TYPE } from '../../types/waypointRoute.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
@@ -697,6 +721,7 @@ const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRk
 const cesiumInstance = ref(null);
 const viewerInstance = ref(null);
 const eventHandler = ref(null);
+const mapRootRef = ref(null);
 const sceneMode = ref(2); // 2: SCENE2D, 3: SCENE3D
 const isFovVisible = ref(false);
 const hoverPos = ref({ lat: 0, lng: 0, asl: 0, hae: 0 });
@@ -721,6 +746,10 @@ const previewTotalDistance = ref(0);
 const previewAltitudeAdjustedCount = ref(0);
 const previewMaxAltitudeAdjustment = ref(0);
 const previewAvoidanceSegmentCount = ref(0);
+const manualFlightActiveKeys = ref([]);
+const manualFlightHeadingDegrees = ref(0);
+const manualFlightAltitude = ref(0);
+const manualFlightSafetyState = ref('');
 
 let mapSwitchSequence = 0;
 let buildingTileset = null;
@@ -744,6 +773,10 @@ let previewLastFovUpdateAt = 0;
 let previewCameraFollowMode = 'idle';
 let previewThirdPersonRange = 100;
 let preview2DFrustumWidth = 0;
+let manualFlightRafId = 0;
+let manualFlightLastTimestamp = 0;
+let remove2DFrustumGuard = null;
+let remove2DRenderErrorRecovery = null;
 
 const wideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const zoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
@@ -823,6 +856,22 @@ const resolvedObstacleAvoidance = computed(() => ({
   ...(props.obstacleAvoidance || {})
 }));
 const previewFocalLength = computed(() => 24 * previewZoomFactor.value);
+const manualFlightKeyLabels = {
+  KeyW: 'W 升高',
+  KeyS: 'S 降低',
+  KeyA: 'A 左转',
+  KeyD: 'D 右转',
+  ArrowUp: '↑ 前进',
+  ArrowDown: '↓ 后退',
+  ArrowLeft: '← 左飞',
+  ArrowRight: '→ 右飞'
+};
+const manualFlightStatusLabel = computed(() => {
+  const active = manualFlightActiveKeys.value.map(code => manualFlightKeyLabels[code]).filter(Boolean);
+  const movement = active.length ? active.join(' + ') : '等待按键';
+  const safety = manualFlightSafetyState.value ? ` · ${manualFlightSafetyState.value}` : '';
+  return `${movement} · 航向 ${Math.round(manualFlightHeadingDegrees.value)}° · 高度 ${manualFlightAltitude.value.toFixed(1)}m${safety}`;
+});
 
 // --- 3. Computed Properties ---
 // 使用 Props 中的 isPatrolMode 避免冲突
@@ -1466,6 +1515,82 @@ const ROUTE_CORRIDOR_MIN_RADIUS_METERS = 3;
 
 const waitForNextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
 
+const sanitize2DFrustum = (viewer = viewerInstance.value, Cesium = cesiumInstance.value) => {
+  if (!viewer || !Cesium || viewer.isDestroyed?.() || viewer.scene.mode !== Cesium.SceneMode.SCENE2D) {
+    return false;
+  }
+  const frustum = viewer.camera?.frustum;
+  if (!frustum || !('left' in frustum) || !('right' in frustum)) return false;
+
+  const left = Number(frustum.left);
+  const right = Number(frustum.right);
+  const top = Number(frustum.top);
+  const bottom = Number(frustum.bottom);
+  const currentWidth = right - left;
+  const currentHeight = top - bottom;
+  const isValid = Number.isFinite(currentWidth)
+    && Number.isFinite(currentHeight)
+    && currentWidth >= 1
+    && currentHeight >= 1
+    && right > left
+    && top > bottom;
+  if (isValid) {
+    preview2DFrustumWidth = Math.max(10, Math.min(50000000, currentWidth));
+    return false;
+  }
+
+  const widthCandidates = [
+    preview2DFrustumWidth,
+    Math.abs(currentWidth),
+    Math.abs(right) * 2,
+    Math.abs(left) * 2,
+    Number(viewer.camera.positionCartographic?.height)
+  ];
+  const safeWidth = Math.max(10, Math.min(
+    50000000,
+    widthCandidates.find(value => Number.isFinite(value) && value >= 1) || 1000
+  ));
+  const canvasWidth = Number(viewer.canvas?.clientWidth || viewer.canvas?.width);
+  const canvasHeight = Number(viewer.canvas?.clientHeight || viewer.canvas?.height);
+  const aspectRatio = Number.isFinite(canvasWidth / canvasHeight) && canvasWidth > 0 && canvasHeight > 0
+    ? canvasWidth / canvasHeight
+    : 1;
+  const halfWidth = safeWidth / 2;
+  const halfHeight = halfWidth / Math.max(0.1, aspectRatio);
+
+  frustum.right = halfWidth;
+  frustum.left = -halfWidth;
+  frustum.top = halfHeight;
+  frustum.bottom = -halfHeight;
+  if (!Number.isFinite(Number(frustum.near)) || Number(frustum.near) <= 0) frustum.near = 1;
+  if (!Number.isFinite(Number(frustum.far)) || Number(frustum.far) <= Number(frustum.near)) {
+    frustum.far = 500000000;
+  }
+  preview2DFrustumWidth = safeWidth;
+  viewer.scene.requestRender();
+  return true;
+};
+
+const install2DFrustumGuard = (viewer, Cesium) => {
+  remove2DFrustumGuard?.();
+  remove2DRenderErrorRecovery?.();
+  remove2DFrustumGuard = viewer.scene.preUpdate.addEventListener(() => {
+    sanitize2DFrustum(viewer, Cesium);
+  });
+  remove2DRenderErrorRecovery = viewer.scene.renderError.addEventListener((_scene, error) => {
+    if (!String(error?.message || error).includes('right must be greater than left')) return;
+    sanitize2DFrustum(viewer, Cesium);
+    setTimeout(() => {
+      if (viewer.isDestroyed?.()) return;
+      const widget = viewer.cesiumWidget;
+      if (widget && !widget.isDestroyed?.() && widget.useDefaultRenderLoop === false) {
+        widget.useDefaultRenderLoop = true;
+      }
+      viewer.scene.requestRender();
+    }, 0);
+  });
+};
+
 const enableSceneNavigation = (viewer = viewerInstance.value) => {
   const controller = viewer?.scene?.screenSpaceCameraController;
   if (!controller) return;
@@ -1506,6 +1631,7 @@ const ensureScene2D = async (viewer = viewerInstance.value, Cesium = cesiumInsta
     viewer.scene.morphTo2D(0);
     viewer.scene.completeMorph();
   }
+  sanitize2DFrustum(viewer, Cesium);
   enableSceneNavigation(viewer);
   await waitForNextFrame();
   return viewer.scene.mode === Cesium.SceneMode.SCENE2D;
@@ -1650,6 +1776,7 @@ const removePreviewEntities = () => {
 
 const invalidateRoutePreview = () => {
   stopRoutePreviewFrame();
+  clearManualFlightKeys();
   unlockPreviewCamera();
   removePreviewEntities();
   previewPath = [];
@@ -2017,7 +2144,7 @@ const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = fal
 
   const updateTime = Date.now();
   const shouldRebuild = force
-    || !previewPlaying.value
+    || (!previewPlaying.value && previewViewMode.value !== 'manual')
     || previewLastFovUpdateAt === 0
     || updateTime - previewLastFovUpdateAt >= 80;
   if (!shouldRebuild) return;
@@ -2085,9 +2212,10 @@ const captureThirdPersonRange = (viewer, Cesium, previousTarget) => {
 };
 
 const capture2DFrustumWidth = (viewer) => {
+  sanitize2DFrustum(viewer, cesiumInstance.value);
   const frustum = viewer.camera.frustum;
   const width = Number(frustum?.right) - Number(frustum?.left);
-  if (Number.isFinite(width) && width > 0) {
+  if (Number.isFinite(width) && width >= 1) {
     preview2DFrustumWidth = Math.max(10, Math.min(50000000, width));
   }
 };
@@ -2149,18 +2277,33 @@ const followPreviewCamera = (position, nextPosition, cameraState) => {
     capture2DFrustumWidth(viewer);
     unlockPreviewCamera();
     const cartographic = Cesium.Cartographic.fromCartesian(position);
-    const viewHeight = preview2DFrustumWidth
-      || Math.max(10, Number(viewer.camera.positionCartographic?.height) || 1000);
-    viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromRadians(
-        cartographic.longitude,
-        cartographic.latitude,
-        viewHeight
-      ),
-      orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 }
-    });
+    const storedWidth = Number(preview2DFrustumWidth);
+    const cameraHeight = Number(viewer.camera.positionCartographic?.height);
+    const viewHeight = Math.max(10, Math.min(
+      50000000,
+      Number.isFinite(storedWidth) && storedWidth >= 1
+        ? storedWidth
+        : (Number.isFinite(cameraHeight) && cameraHeight >= 1 ? cameraHeight : 1000)
+    ));
+    if (
+      cartographic
+      && Number.isFinite(cartographic.longitude)
+      && Number.isFinite(cartographic.latitude)
+    ) {
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromRadians(
+          cartographic.longitude,
+          cartographic.latitude,
+          viewHeight
+        ),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-90), roll: 0 }
+      });
+    }
+    sanitize2DFrustum(viewer, Cesium);
     previewCameraFollowMode = '2d';
-    updatePreviewScreenRotation(viewer, Cesium);
+    // 2D 地图始终保持正北朝上，直接按航向设置图标旋转；避免
+    // SceneTransforms.worldToWindowCoordinates 临时改写 2D 正交视锥。
+    previewScreenRotation = -heading;
     return;
   }
 
@@ -2229,6 +2372,190 @@ const updateRoutePreviewPosition = (distance) => {
   viewerInstance.value?.scene?.requestRender?.();
 };
 
+const isManualFlightKey = (code) => Boolean(manualFlightKeyLabels[code]);
+
+const isEditableKeyboardTarget = (target) => {
+  if (!(target instanceof Element)) return false;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest(
+    'input, textarea, select, [contenteditable="true"], .ant-input, .ant-input-number-input, .ant-select-selection-search-input, .ant-picker-input input'
+  ));
+};
+
+const stopManualFlightLoop = () => {
+  if (manualFlightRafId) cancelAnimationFrame(manualFlightRafId);
+  manualFlightRafId = 0;
+  manualFlightLastTimestamp = 0;
+};
+
+const clearManualFlightKeys = () => {
+  manualFlightActiveKeys.value = [];
+  stopManualFlightLoop();
+};
+
+const getManualSurfaceHeight = (cartographic) => {
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium || !cartographic) return 0;
+  if (viewer.scene.mode === Cesium.SceneMode.SCENE3D && typeof viewer.scene.sampleHeight === 'function') {
+    try {
+      const excluded = [previewRouteEntity, previewDroneEntity, previewHeadingEntity].filter(Boolean);
+      const sampledHeight = viewer.scene.sampleHeight(
+        cartographic,
+        excluded,
+        Math.max(0.1, Number(resolvedObstacleAvoidance.value.horizontalClearance) || 3)
+      );
+      if (Number.isFinite(sampledHeight)) return Number(sampledHeight);
+    } catch (error) {
+      console.warn('Failed to sample manual-flight obstacle height.', error);
+    }
+  }
+  return Number(viewer.scene.globe.getHeight(cartographic)) || 0;
+};
+
+const buildManualHeadingTip = (position, headingRadians, Cesium) => {
+  const localFrame = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+  const localDirection = new Cesium.Cartesian3(
+    Math.sin(headingRadians),
+    Math.cos(headingRadians),
+    0
+  );
+  const worldDirection = Cesium.Matrix4.multiplyByPointAsVector(
+    localFrame,
+    localDirection,
+    new Cesium.Cartesian3()
+  );
+  Cesium.Cartesian3.normalize(worldDirection, worldDirection);
+  return Cesium.Cartesian3.add(
+    position,
+    Cesium.Cartesian3.multiplyByScalar(worldDirection, 35, new Cesium.Cartesian3()),
+    new Cesium.Cartesian3()
+  );
+};
+
+const updateManualFlightVisual = (position, surfaceHeight) => {
+  const Cesium = cesiumInstance.value;
+  if (!Cesium || !position) return;
+  const headingRadians = Cesium.Math.toRadians(normalizeHeadingDegrees(manualFlightHeadingDegrees.value));
+  const headingTip = buildManualHeadingTip(position, headingRadians, Cesium);
+  const cameraState = {
+    pitch: previewGimbalPitch.value,
+    zoomFactor: previewZoomFactor.value,
+    yaw: normalizeHeadingDegrees(manualFlightHeadingDegrees.value)
+  };
+  const cartographic = Cesium.Cartographic.fromCartesian(position);
+  manualFlightAltitude.value = Number(cartographic?.height) || 0;
+  followPreviewCamera(position, headingTip, cameraState);
+  updateRoutePreviewFov(position, cameraState, surfaceHeight, false);
+  viewerInstance.value?.scene?.requestRender?.();
+};
+
+const initializeManualFlight = () => {
+  if (!previewReady.value || !cesiumInstance.value) return;
+  if (!previewVisualPosition) updateRoutePreviewPosition(previewDistance);
+  if (!previewVisualPosition) return;
+  const Cesium = cesiumInstance.value;
+  const cartographic = Cesium.Cartographic.fromCartesian(previewVisualPosition);
+  manualFlightHeadingDegrees.value = normalizeHeadingDegrees(Cesium.Math.toDegrees(previewVisualHeading));
+  manualFlightAltitude.value = Number(cartographic?.height) || 0;
+  manualFlightSafetyState.value = '';
+  clearManualFlightKeys();
+  updateManualFlightVisual(previewVisualPosition, getManualSurfaceHeight(cartographic));
+};
+
+const applyManualFlightDelta = (deltaSeconds) => {
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium || !previewVisualPosition || previewViewMode.value !== 'manual') return;
+
+  const has = code => manualFlightActiveKeys.value.includes(code);
+  const yawDirection = (has('KeyD') ? 1 : 0) - (has('KeyA') ? 1 : 0);
+  manualFlightHeadingDegrees.value = normalizeHeadingDegrees(
+    manualFlightHeadingDegrees.value + yawDirection * 75 * deltaSeconds
+  );
+
+  const forward = (has('ArrowUp') ? 1 : 0) - (has('ArrowDown') ? 1 : 0);
+  const right = (has('ArrowRight') ? 1 : 0) - (has('ArrowLeft') ? 1 : 0);
+  const climb = ((has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0)) * 8 * deltaSeconds;
+  const currentCartographic = Cesium.Cartographic.fromCartesian(previewVisualPosition);
+  const headingRadians = Cesium.Math.toRadians(manualFlightHeadingDegrees.value);
+  const speed = Math.max(0.1, Number(previewSpeed.value) || 10);
+  const localEast = (forward * Math.sin(headingRadians) + right * Math.cos(headingRadians)) * speed * deltaSeconds;
+  const localNorth = (forward * Math.cos(headingRadians) - right * Math.sin(headingRadians)) * speed * deltaSeconds;
+  const localFrame = Cesium.Transforms.eastNorthUpToFixedFrame(previewVisualPosition);
+  const horizontallyMoved = Cesium.Matrix4.multiplyByPoint(
+    localFrame,
+    new Cesium.Cartesian3(localEast, localNorth, 0),
+    new Cesium.Cartesian3()
+  );
+  const nextCartographic = Cesium.Cartographic.fromCartesian(horizontallyMoved);
+  const surfaceHeight = getManualSurfaceHeight(nextCartographic);
+  const clearance = Math.max(2, Number(resolvedObstacleAvoidance.value.verticalClearance) || 10);
+  const requestedAltitude = (Number(currentCartographic?.height) || 0) + climb;
+  const safeAltitude = surfaceHeight + clearance;
+  nextCartographic.height = Math.max(requestedAltitude, safeAltitude);
+  manualFlightSafetyState.value = nextCartographic.height > requestedAltitude + 0.05
+    ? '建筑安全高度保护'
+    : '';
+
+  const nextPosition = markRaw(Cesium.Cartesian3.fromRadians(
+    nextCartographic.longitude,
+    nextCartographic.latitude,
+    nextCartographic.height
+  ));
+  updateManualFlightVisual(nextPosition, surfaceHeight);
+};
+
+const ensureManualFlightLoop = () => {
+  if (manualFlightRafId) return;
+  const tick = (timestamp) => {
+    if (previewViewMode.value !== 'manual' || !manualFlightActiveKeys.value.length) {
+      stopManualFlightLoop();
+      return;
+    }
+    const previousTimestamp = manualFlightLastTimestamp || timestamp;
+    const deltaSeconds = Math.min(0.05, Math.max(0, (timestamp - previousTimestamp) / 1000));
+    manualFlightLastTimestamp = timestamp;
+    if (deltaSeconds > 0) applyManualFlightDelta(deltaSeconds);
+    manualFlightRafId = requestAnimationFrame(tick);
+  };
+  manualFlightRafId = requestAnimationFrame(tick);
+};
+
+const handleManualFlightKeyDown = (event) => {
+  if (
+    previewViewMode.value !== 'manual'
+    || !previewReady.value
+    || !isManualFlightKey(event.code)
+    || isEditableKeyboardTarget(event.target)
+  ) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!manualFlightActiveKeys.value.includes(event.code)) {
+    manualFlightActiveKeys.value = [...manualFlightActiveKeys.value, event.code];
+    applyManualFlightDelta(1 / 60);
+  }
+  ensureManualFlightLoop();
+};
+
+const handleManualFlightKeyUp = (event) => {
+  if (previewViewMode.value !== 'manual' || !isManualFlightKey(event.code)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  manualFlightActiveKeys.value = manualFlightActiveKeys.value.filter(code => code !== event.code);
+  if (!manualFlightActiveKeys.value.length) stopManualFlightLoop();
+};
+
+const handleManualFlightVisibility = () => {
+  if (document.hidden) clearManualFlightKeys();
+};
+
+const focusManualFlightInput = (event) => {
+  if (previewViewMode.value !== 'manual') return;
+  if (event?.target instanceof Element && event.target.closest('button, input, select, textarea, a')) return;
+  mapRootRef.value?.focus?.({ preventScroll: true });
+};
+
 const runRoutePreviewFrame = (timestamp) => {
   if (!previewPlaying.value) return;
   const previousTimestamp = previewLastTimestamp || timestamp;
@@ -2246,7 +2573,7 @@ const runRoutePreviewFrame = (timestamp) => {
 };
 
 const toggleRoutePreview = () => {
-  if (!previewReady.value) return;
+  if (!previewReady.value || previewViewMode.value === 'manual') return;
   if (previewPlaying.value) {
     stopRoutePreviewFrame();
     unlockPreviewCamera();
@@ -2263,13 +2590,17 @@ const toggleRoutePreview = () => {
 
 const resetRoutePreview = () => {
   stopRoutePreviewFrame();
+  clearManualFlightKeys();
   previewFinished.value = false;
-  if (previewReady.value) updateRoutePreviewPosition(0);
+  if (previewReady.value) {
+    updateRoutePreviewPosition(0);
+    if (previewViewMode.value === 'manual') initializeManualFlight();
+  }
   unlockPreviewCamera();
 };
 
 const seekRoutePreview = (progress) => {
-  if (!previewReady.value) return;
+  if (!previewReady.value || previewViewMode.value === 'manual') return;
   previewFinished.value = false;
   updateRoutePreviewPosition((Math.max(0, Math.min(100, Number(progress) || 0)) / 100) * previewTotalDistance.value);
   if (!previewPlaying.value) unlockPreviewCamera();
@@ -2278,6 +2609,7 @@ const seekRoutePreview = (progress) => {
 const onViewerReadyInternal = ({ Cesium, viewer }) => {
   cesiumInstance.value = markRaw(Cesium);
   viewerInstance.value = markRaw(viewer);
+  install2DFrustumGuard(viewer, Cesium);
   Cesium.Ion.defaultAccessToken = cesiumAccessToken;
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
@@ -2746,12 +3078,46 @@ watch(() => props.routeType, () => {
   if (previewReady.value) invalidateRoutePreview();
 });
 
-watch(previewViewMode, () => {
-  if (previewReady.value) updateRoutePreviewPosition(previewDistance);
+watch(previewViewMode, (mode, previousMode) => {
+  if (!previewReady.value) return;
+  if (mode === 'manual') {
+    stopRoutePreviewFrame();
+    previewFinished.value = false;
+    previewCameraFollowMode = 'idle';
+    unlockPreviewCamera();
+    initializeManualFlight();
+    nextTick(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      mapRootRef.value?.focus?.({ preventScroll: true });
+    });
+    return;
+  }
+  if (previousMode === 'manual') {
+    clearManualFlightKeys();
+    manualFlightSafetyState.value = '';
+    previewCameraFollowMode = 'idle';
+  }
+  updateRoutePreviewPosition(previewDistance);
 });
 
 // --- 6. Lifecycle ---
+onMounted(() => {
+  window.addEventListener('keydown', handleManualFlightKeyDown, { capture: true, passive: false });
+  window.addEventListener('keyup', handleManualFlightKeyUp, { capture: true, passive: false });
+  window.addEventListener('blur', clearManualFlightKeys);
+  document.addEventListener('visibilitychange', handleManualFlightVisibility);
+});
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleManualFlightKeyDown, true);
+  window.removeEventListener('keyup', handleManualFlightKeyUp, true);
+  window.removeEventListener('blur', clearManualFlightKeys);
+  document.removeEventListener('visibilitychange', handleManualFlightVisibility);
+  clearManualFlightKeys();
+  remove2DFrustumGuard?.();
+  remove2DRenderErrorRecovery?.();
+  remove2DFrustumGuard = null;
+  remove2DRenderErrorRecovery = null;
   mapSwitchSequence += 1;
   invalidateRoutePreview();
   removeBuildingTileset();
@@ -2772,3 +3138,21 @@ onBeforeUnmount(() => {
 
 defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, mapMode, clearFov, clearVirtualFlight });
 </script>
+
+<style scoped>
+kbd {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  padding: 0 5px;
+  border: 1px solid rgb(186 230 253 / 45%);
+  border-radius: 4px;
+  background: rgb(2 132 199 / 28%);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 18%);
+  color: #e0f2fe;
+  font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+</style>
