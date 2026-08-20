@@ -1,7 +1,6 @@
-// 默认与当前页面同源，避免局域网/远程访问时仍指向 127.0.0.1
+// 默认由 Web 静态服务反向代理，避免 HTTPS 页面请求 HTTP Server API 被拦截。
 export function getDefaultTaskApiBase() {
-  const { protocol, hostname } = window.location
-  return `${protocol}//${hostname}:8090`
+  return '/api'
 }
 
 export function getTaskApiBase() {
