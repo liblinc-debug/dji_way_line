@@ -75,6 +75,7 @@ import {
   getAircraftModelMeta,
   getV2CompatibleWaypointExportMeta
 } from '../../constants/aircraftModels.js';
+import { getTaskApiBase } from '../../utils/taskApi.js';
 
 const props = defineProps({
   visible: {
@@ -103,7 +104,7 @@ const modelOptions = computed(() => (
 const loadUserDefinedModels = async () => {
   modelLoadError.value = '';
   try {
-    const apiBase = localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090';
+    const apiBase = getTaskApiBase();
     const resp = await fetch(`${apiBase}/models`, {
       headers: { 'Content-Type': 'application/json' }
     });

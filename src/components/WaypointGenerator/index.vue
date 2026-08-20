@@ -76,6 +76,7 @@ import {
 import { mergeDerivedRequirements, normalizeRouteLinking } from '../../utils/routeLinking.js';
 import { gcj02ToWgs84 } from '../../utils/coordTransform.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
+import { getTaskApiBase } from '../../utils/taskApi.js';
 import CreateMissionModal from './CreateMissionModal.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
@@ -85,7 +86,7 @@ const MISSIONS_STORAGE_KEY = 'missions';
 const MISSIONS_GCJ02_BACKUP_KEY = 'missions-gcj02-backup-v1';
 const UI_STATE_STORAGE_KEY = 'waypoint-generator-ui-state';
 const MISSION_COORDINATE_SYSTEM = 'WGS84';
-const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090');
+const apiBase = ref(getTaskApiBase());
 
 const missions = ref([]);
 const currentView = ref('library');

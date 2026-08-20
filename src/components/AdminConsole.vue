@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { checkRouteAircraftCompatibility, getMissionLinkingSummary } from '../utils/routeLinking.js'
+import { getTaskApiBase } from '../utils/taskApi.js'
 
 const ROUTE_LIBRARY_STORAGE_KEY = 'missions'
-const apiBase = ref(localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090')
+const apiBase = ref(getTaskApiBase())
 const loading = reactive({
   models: false,
   aircrafts: false,

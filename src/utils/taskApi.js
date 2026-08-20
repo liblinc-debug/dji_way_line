@@ -1,5 +1,11 @@
+// 默认与当前页面同源，避免局域网/远程访问时仍指向 127.0.0.1
+export function getDefaultTaskApiBase() {
+  const { protocol, hostname } = window.location
+  return `${protocol}//${hostname}:8090`
+}
+
 export function getTaskApiBase() {
-  return localStorage.getItem('uav_task_api_base') || 'http://127.0.0.1:8090'
+  return localStorage.getItem('uav_task_api_base') || getDefaultTaskApiBase()
 }
 
 export async function taskApiRequest(path, options = {}) {
