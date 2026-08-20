@@ -15,6 +15,7 @@
         :slope-config="activeMapData.slopeConfig"
         :left-overlay-offset="activeMapData.leftOverlayOffset"
         @update:takeoffHeight="handleTakeoffHeightUpdate" @map-click="onMapClick" @insert-waypoint="onInsertWaypoint"
+        @waypoint-move="onWaypointMove"
         class="h-full w-full" />
     </div>
 
@@ -53,8 +54,9 @@
     <!-- 2D/3D 切换按钮 (避开右侧编辑器面板，使用 calc 动态计算位置) -->
     <div class="fixed bottom-32 z-[10000] pointer-events-auto transition-all duration-300"
       :style="{ right: currentView === 'editor' && editingMission ? '370px' : '20px' }">
-      <button v-if="mapRef" @click="mapRef.toggleSceneMode()"
-        class="w-10 h-10 rounded-full border border-white/30 bg-black/60 backdrop-blur-xl flex flex-col items-center justify-center cursor-pointer hover:bg-black/80 hover:border-blue-400/50 transition-all group active:scale-90 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+      <button v-if="mapRef" :disabled="mapRef.mapLoading" @click="mapRef.toggleSceneMode()"
+        :title="mapRef.mapLoading ? '地图切换中，请稍候' : '切换 2D/3D 场景'"
+        class="w-10 h-10 rounded-full border border-white/30 bg-black/60 backdrop-blur-xl flex flex-col items-center justify-center cursor-pointer hover:bg-black/80 hover:border-blue-400/50 transition-all group active:scale-90 disabled:cursor-wait disabled:opacity-50 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
         <span
           class="text-[9px] font-bold text-gray-400 group-hover:text-blue-300 transition-colors leading-none uppercase">Scene</span>
         <span class="text-[12px] font-black text-white group-hover:text-blue-400 transition-colors">
@@ -607,6 +609,12 @@ const onMapClick = (e) => {
 const onInsertWaypoint = (data) => {
   if (currentView.value === 'editor' && editorRef.value?.handleInsertWaypoint) {
     editorRef.value.handleInsertWaypoint(data);
+  }
+};
+
+const onWaypointMove = (data) => {
+  if (currentView.value === 'editor' && editorRef.value?.handleWaypointMove) {
+    editorRef.value.handleWaypointMove(data);
   }
 };
 

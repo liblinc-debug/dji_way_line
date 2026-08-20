@@ -27,7 +27,7 @@
             </vc-entity>
 
             <!-- 3. Waypoint Icon/Aircraft -->
-            <vc-entity :position="wp.cartesian">
+            <vc-entity :id="'route-waypoint-' + index" :position="wp.cartesian">
               <!-- Always show the cyan base point for better visibility -->
               <vc-graphics-point :pixelSize="14" :color="'#00f2ff'" :outlineColor="'white'" :outlineWidth="2.5"
                 :disableDepthTestDistance="Number.POSITIVE_INFINITY"></vc-graphics-point>
@@ -506,6 +506,8 @@
       </template>
     </vc-viewer>
 
+    <div v-if="mapLoading" class="absolute inset-0 z-20 cursor-wait pointer-events-auto" @click.stop @pointerdown.stop></div>
+
     <!-- UI Overlay Info -->
     <div @mousemove.stop
       class="absolute bottom-0 left-0 right-0 h-7 bg-[#0a0a0ae6] backdrop-blur-md flex items-center justify-between px-6 text-[10px] text-gray-400 font-mono z-20 select-none border-t border-white/5">
@@ -576,7 +578,7 @@
         <button
           type="button"
           class="shrink-0 rounded bg-blue-500 px-3 py-1.5 text-xs font-semibold hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="previewPreparing || mapMode !== 'buildings'"
+          :disabled="previewPreparing || mapLoading || mapMode !== 'buildings'"
           @click="prepareRoutePreview"
         >
           {{ previewPreparing ? '采样中…' : (previewReady ? '重新采样' : '生成预览') }}
@@ -715,7 +717,7 @@ const props = defineProps({
   previewMode: { type: String, default: 'idle' }
 });
 
-const emit = defineEmits(['map-click', 'fly-to', 'context-menu', 'insert-waypoint', 'update:takeoffHeight']);
+const emit = defineEmits(['map-click', 'fly-to', 'context-menu', 'insert-waypoint', 'waypoint-move', 'update:takeoffHeight']);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
 
 // --- 2. Reactive State (Refs) ---
@@ -735,6 +737,7 @@ const hasAutoLocated = ref(false);
 const mapMode = ref('standard');
 const mapLoading = ref(false);
 const mapStatus = ref('ArcGIS 影像 · WGS84 · Cesium 地形');
+const draggedWaypointIndex = ref(-1);
 const previewPreparing = ref(false);
 const previewError = ref('');
 const previewPathVersion = ref(0);
@@ -778,6 +781,8 @@ let manualFlightRafId = 0;
 let manualFlightLastTimestamp = 0;
 let remove2DFrustumGuard = null;
 let remove2DRenderErrorRecovery = null;
+let finishWaypointDragListener = null;
+let suppressNextMapClick = false;
 
 const wideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const zoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
@@ -1595,6 +1600,10 @@ const install2DFrustumGuard = (viewer, Cesium) => {
 const enableSceneNavigation = (viewer = viewerInstance.value) => {
   const controller = viewer?.scene?.screenSpaceCameraController;
   if (!controller) return;
+  if (mapLoading.value || draggedWaypointIndex.value !== -1) {
+    controller.enableInputs = false;
+    return;
+  }
   controller.enableInputs = true;
   controller.enableZoom = true;
   controller.enableRotate = true;
@@ -1668,13 +1677,14 @@ const addImageryForMode = async (_mode, Cesium, viewer) => {
 };
 
 const applyMapMode = async (options = {}) => {
-  if (!viewerInstance.value || !cesiumInstance.value) return;
+  if (!viewerInstance.value || !cesiumInstance.value || mapLoading.value) return;
   const preservePreview = options?.preservePreview === true;
   const sequence = ++mapSwitchSequence;
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
   const mode = mapMode.value;
   mapLoading.value = true;
+  viewer.scene.screenSpaceCameraController.enableInputs = false;
   mapStatus.value = '';
   if (preservePreview) {
     stopRoutePreviewFrame();
@@ -1726,6 +1736,7 @@ const applyMapMode = async (options = {}) => {
   } finally {
     if (sequence === mapSwitchSequence) {
       mapLoading.value = false;
+      enableSceneNavigation(viewer);
       viewer.scene.requestRender();
     }
   }
@@ -2624,8 +2635,55 @@ const onViewerReadyInternal = ({ Cesium, viewer }) => {
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   eventHandler.value = handler;
+  const resolveWaypointIndex = (screenPosition) => {
+    const picked = viewer.scene.pick(screenPosition);
+    const entityId = typeof picked?.id === 'string' ? picked.id : picked?.id?.id;
+    const match = /^route-waypoint-(\d+)$/.exec(String(entityId || ''));
+    return match ? Number(match[1]) : -1;
+  };
+  const pickDraggedPosition = (screenPosition) => {
+    const ray = viewer.camera.getPickRay(screenPosition);
+    const cartesian = ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+    const fallback = cartesian || viewer.camera.pickEllipsoid(screenPosition, viewer.scene.globe.ellipsoid);
+    if (!Cesium.defined(fallback)) return null;
+    const cartographic = Cesium.Cartographic.fromCartesian(fallback);
+    return {
+      lat: Cesium.Math.toDegrees(cartographic.latitude),
+      lng: Cesium.Math.toDegrees(cartographic.longitude),
+      terrainHeight: Math.round(viewer.scene.globe.getHeight(cartographic) || cartographic.height || 0)
+    };
+  };
+  const finishWaypointDrag = () => {
+    if (draggedWaypointIndex.value === -1) return;
+    draggedWaypointIndex.value = -1;
+    viewer.scene.canvas.style.cursor = '';
+    enableSceneNavigation(viewer);
+    setTimeout(() => { suppressNextMapClick = false; }, 0);
+  };
+  finishWaypointDragListener = finishWaypointDrag;
+  window.addEventListener('pointerup', finishWaypointDragListener);
+  window.addEventListener('blur', finishWaypointDragListener);
+  handler.setInputAction((movement) => {
+    if (mapLoading.value || props.selectedWpIndex < 0) return;
+    const index = resolveWaypointIndex(movement.position);
+    if (index !== props.selectedWpIndex) return;
+    draggedWaypointIndex.value = index;
+    suppressNextMapClick = true;
+    viewer.scene.screenSpaceCameraController.enableInputs = false;
+    viewer.scene.canvas.style.cursor = 'grabbing';
+  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+  handler.setInputAction(finishWaypointDrag, Cesium.ScreenSpaceEventType.LEFT_UP);
   handler.setInputAction((m) => {
     if (!viewerInstance.value || !cesiumInstance.value) return;
+    if (draggedWaypointIndex.value !== -1) {
+      const coords = pickDraggedPosition(m.endPosition);
+      if (coords) emit('waypoint-move', { index: draggedWaypointIndex.value, ...coords });
+      return;
+    }
+    const hoveredWaypointIndex = resolveWaypointIndex(m.endPosition);
+    viewer.scene.canvas.style.cursor = hoveredWaypointIndex === props.selectedWpIndex && props.selectedWpIndex >= 0
+      ? 'grab'
+      : '';
     const ellipsoid = viewerInstance.value.scene.globe.ellipsoid;
     const cartesian = viewerInstance.value.camera.pickEllipsoid(m.endPosition, ellipsoid);
     if (!cartesian) return;
@@ -2711,7 +2769,7 @@ const locateToCurrentPosition = () => {
 };
 
 const onMapClick = (e) => {
-  if (!viewerInstance.value || !cesiumInstance.value) return;
+  if (!viewerInstance.value || !cesiumInstance.value || mapLoading.value || suppressNextMapClick) return;
   const windowPosition = e.windowPosition || e.position;
   let cartesian = viewerInstance.value.scene.pickPosition(windowPosition);
   if (!cesiumInstance.value.defined(cartesian)) {
@@ -2739,7 +2797,7 @@ const onMapClick = (e) => {
 };
 
 const toggleSceneMode = async () => {
-  if (!viewerInstance.value || !cesiumInstance.value) return;
+  if (!viewerInstance.value || !cesiumInstance.value || mapLoading.value || draggedWaypointIndex.value !== -1) return;
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
 
@@ -3018,7 +3076,7 @@ const clearVirtualFlight = () => {
 
 // --- 5. Watchers ---
 watch(() => props.waypoints, (newWps, oldWps) => {
-  if (!viewerInstance.value || !cesiumInstance.value || !newWps?.length) return;
+  if (!viewerInstance.value || !cesiumInstance.value || draggedWaypointIndex.value !== -1 || !newWps?.length) return;
   const p = newWps[0];
   if (!p || !p.lng || !p.lat) return; // 关键安全检查
 
@@ -3121,6 +3179,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', handleManualFlightKeyUp, true);
   window.removeEventListener('blur', clearManualFlightKeys);
   document.removeEventListener('visibilitychange', handleManualFlightVisibility);
+  if (finishWaypointDragListener) {
+    window.removeEventListener('pointerup', finishWaypointDragListener);
+    window.removeEventListener('blur', finishWaypointDragListener);
+    finishWaypointDragListener = null;
+  }
   clearManualFlightKeys();
   remove2DFrustumGuard?.();
   remove2DRenderErrorRecovery?.();
@@ -3144,7 +3207,7 @@ onBeforeUnmount(() => {
   cesiumInstance.value = null;
 });
 
-defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, mapMode, clearFov, clearVirtualFlight });
+defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, mapMode, mapLoading, clearFov, clearVirtualFlight });
 </script>
 
 <style scoped>

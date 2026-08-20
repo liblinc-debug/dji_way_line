@@ -930,14 +930,26 @@ const onMapClick = (coords) => {
         isSettingTakeoffPoint.value = false;
         return;
     }
-    let defaultHeight = missionConfig.value.globalHeight || 50;
-    if (missionConfig.value.executeHeightMode === 'WGS84') {
-        // In WGS84 absolute mode, defaulting to 50m ASL usually puts points underground.
-        // We automatically add terrainHeight to keep the point above ground when created.
-        defaultHeight += (coords.terrainHeight || 0);
+    const previousWaypoint = waypoints.value[waypoints.value.length - 1];
+    waypoints.value = [...waypoints.value, buildWaypointAt(coords, previousWaypoint)];
+    handleSelectWaypoint(waypoints.value.length - 1);
+};
+
+const buildWaypointAt = (coords, previousWaypoint = null) => {
+    if (previousWaypoint) {
+        return {
+            ...JSON.parse(JSON.stringify(previousWaypoint)),
+            lat: coords.lat,
+            lng: coords.lng,
+            terrainHeight: coords.terrainHeight || 0
+        };
     }
 
-    waypoints.value = [...waypoints.value, {
+    let defaultHeight = missionConfig.value.globalHeight || 50;
+    if (missionConfig.value.executeHeightMode === 'WGS84') {
+        defaultHeight += (coords.terrainHeight || 0);
+    }
+    return {
         lat: coords.lat,
         lng: coords.lng,
         height: Math.round(defaultHeight),
@@ -948,8 +960,7 @@ const onMapClick = (coords) => {
             { type: ACTION_TYPE.GIMBAL_PITCH, params: { ...DEFAULT_ACTION_PARAMS[ACTION_TYPE.GIMBAL_PITCH] } },
             { type: ACTION_TYPE.AIRCRAFT_YAW, params: { ...DEFAULT_ACTION_PARAMS[ACTION_TYPE.AIRCRAFT_YAW] } }
         ]
-    }];
-    handleSelectWaypoint(waypoints.value.length - 1);
+    };
 };
 
 const updateWaypoint = (index, data) => {
@@ -960,16 +971,11 @@ const updateWaypoint = (index, data) => {
 
 const handleInsertWaypoint = (data) => {
     const { type, lat, lng } = data;
-    const newWp = {
-        lat, lng,
-        height: missionConfig.value.globalHeight || 50,
-        speed: missionConfig.value.globalSpeed || 5,
-        terrainHeight: data.terrainHeight || 0,
-        actions: [
-            { type: ACTION_TYPE.GIMBAL_PITCH, params: { ...DEFAULT_ACTION_PARAMS[ACTION_TYPE.GIMBAL_PITCH] } },
-            { type: ACTION_TYPE.AIRCRAFT_YAW, params: { ...DEFAULT_ACTION_PARAMS[ACTION_TYPE.AIRCRAFT_YAW] } }
-        ]
-    };
+    const insertionIndex = type === 'add-before'
+        ? selectedWpIndex.value
+        : (type === 'add-after' ? selectedWpIndex.value + 1 : waypoints.value.length);
+    const previousWaypoint = insertionIndex > 0 ? waypoints.value[insertionIndex - 1] : null;
+    const newWp = buildWaypointAt({ lat, lng, terrainHeight: data.terrainHeight }, previousWaypoint);
     if (type === 'add-after' && selectedWpIndex.value !== -1) {
         waypoints.value.splice(selectedWpIndex.value + 1, 0, newWp);
         handleSelectWaypoint(selectedWpIndex.value + 1);
@@ -980,6 +986,17 @@ const handleInsertWaypoint = (data) => {
         waypoints.value.push(newWp);
         handleSelectWaypoint(waypoints.value.length - 1);
     }
+};
+
+const handleWaypointMove = ({ index, lat, lng, terrainHeight }) => {
+    const waypoint = waypoints.value[index];
+    if (!waypoint || index !== selectedWpIndex.value) return;
+    updateWaypoint(index, {
+        ...waypoint,
+        lat,
+        lng,
+        terrainHeight: terrainHeight || 0
+    });
 };
 
 const buildWaypointFromVirtualFlight = () => {
@@ -1162,7 +1179,7 @@ const downloadJSON = () => {
 };
 
 defineExpose({
-    onMapClick, handleInsertWaypoint, applyPose: (index, pose) => {
+    onMapClick, handleInsertWaypoint, handleWaypointMove, applyPose: (index, pose) => {
         if (pose) handleRecordPoseInternal(index, pose);
     }
 });
