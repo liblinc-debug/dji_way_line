@@ -686,6 +686,7 @@
 
 <script setup>
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
 import { ACTION_TYPE } from '../../types/waypointRoute.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
@@ -2663,6 +2664,12 @@ const onViewerReadyInternal = ({ Cesium, viewer }) => {
 const locateToCurrentPosition = () => {
   if (hasAutoLocated.value || props.waypoints?.length > 0) return;
   if (!viewerInstance.value || !cesiumInstance.value || !navigator.geolocation) return;
+  // 浏览器定位 API 仅在安全上下文（HTTPS 或 localhost）下可用，否则会静默失败
+  if (!window.isSecureContext) {
+    hasAutoLocated.value = true;
+    message.warning('当前通过 HTTP 访问，浏览器已禁用定位功能，请使用 HTTPS 或 localhost 访问以启用定位');
+    return;
+  }
 
   hasAutoLocated.value = true;
   navigator.geolocation.getCurrentPosition(
@@ -2693,6 +2700,7 @@ const locateToCurrentPosition = () => {
     },
     (error) => {
       console.warn('Failed to locate current position.', error);
+      message.warning('获取当前位置失败，请检查浏览器定位权限');
     },
     {
       enableHighAccuracy: true,
