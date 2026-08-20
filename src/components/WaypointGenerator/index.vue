@@ -39,6 +39,7 @@
           class="pointer-events-none" :key="'wp-editor-' + editingMission.id" :initial-mission="editingMission"
           :get-map-pose="getMapPose"
           @back="handleBackToLibrary" @save="updateAndSaveMission" @update:mission-data="handleMissionUpdate"
+          @focus-waypoint="handleFocusWaypoint"
           @record-pose="handleRecordPoseFromEditor" @fov-update="handleFovUpdateFromEditor"
           @virtual-flight-update="handleVirtualFlightUpdateFromEditor"
           @generate-result="handleWaylineGenerated" @generate-error="handleWaylineGenerateError" />
@@ -575,6 +576,11 @@ const handleMissionUpdate = (data) => {
       _fovData: data.fovData !== undefined ? data.fovData : editingMission.value._fovData
     };
   }
+};
+
+const handleFocusWaypoint = ({ waypoint } = {}) => {
+  if (!waypoint || !mapRef.value?.flyTo) return;
+  mapRef.value.flyTo(waypoint);
 };
 
 // 监听 FOV 数据变更并转发给 MapViewer 组件

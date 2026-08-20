@@ -359,7 +359,7 @@ const props = defineProps({
     }
 });
 
-const emit = defineEmits(['back', 'save', 'update:mission-data', 'record-pose', 'fov-update', 'virtual-flight-update', 'generate-result', 'generate-error']);
+const emit = defineEmits(['back', 'save', 'update:mission-data', 'record-pose', 'fov-update', 'virtual-flight-update', 'generate-result', 'generate-error', 'focus-waypoint']);
 
 // 状态管理
 const missionConfig = ref({
@@ -1054,6 +1054,10 @@ const handleSelectWaypoint = (index) => {
     selectedWpIndex.value = index;
     selectedActionIndex.value = -1;
     previewFocusMode.value = 'waypoint';
+
+    if (index !== -1 && waypoints.value[index]) {
+        emit('focus-waypoint', { index, waypoint: waypoints.value[index] });
+    }
 
     // 自动回显选中航点的姿态参数到预览窗口 (俯仰弧/偏航/变焦)
     if (index !== -1 && waypoints.value[index]) {

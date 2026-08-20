@@ -757,6 +757,11 @@ const manualFlightSafetyState = ref('');
 
 let mapSwitchSequence = 0;
 let buildingTileset = null;
+let baseImageryLayer = null;
+let standardTerrainProvider = null;
+let ellipsoidTerrainProvider = null;
+let activeMapSwitchPromise = null;
+let queuedMapRequest = null;
 let previewRouteEntity = null;
 let previewDroneEntity = null;
 let previewHeadingEntity = null;
@@ -1520,6 +1525,7 @@ const ROUTE_CLEARANCE_METERS = 20;
 const ROUTE_CORRIDOR_MIN_RADIUS_METERS = 3;
 
 const waitForNextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+const waitForDelay = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
 
 const sanitize2DFrustum = (viewer = viewerInstance.value, Cesium = cesiumInstance.value) => {
   if (!viewer || !Cesium || viewer.isDestroyed?.() || viewer.scene.mode !== Cesium.SceneMode.SCENE2D) {
@@ -1660,8 +1666,14 @@ const removeBuildingTileset = () => {
   buildingTileset = null;
 };
 
-const addImageryForMode = async (_mode, Cesium, viewer) => {
-  viewer.imageryLayers.removeAll(true);
+const hideBuildingTileset = () => {
+  if (!buildingTileset || buildingTileset.isDestroyed?.()) return;
+  buildingTileset.show = false;
+};
+
+const ensureBaseImagery = async (Cesium, viewer) => {
+  if (baseImageryLayer && viewer.imageryLayers.contains(baseImageryLayer)) return;
+
   let provider;
   if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
     provider = await Cesium.ArcGisMapServerImageryProvider.fromUrl(ARCGIS_WORLD_IMAGERY_URL, {
@@ -1673,18 +1685,44 @@ const addImageryForMode = async (_mode, Cesium, viewer) => {
       maximumLevel: 19
     });
   }
-  viewer.imageryLayers.addImageryProvider(provider);
+  if (viewer.isDestroyed?.()) return;
+  viewer.imageryLayers.removeAll(true);
+  baseImageryLayer = markRaw(viewer.imageryLayers.addImageryProvider(provider));
 };
 
-const applyMapMode = async (options = {}) => {
-  if (!viewerInstance.value || !cesiumInstance.value || mapLoading.value) return;
-  const preservePreview = options?.preservePreview === true;
+const ensureBuildingTileset = async (Cesium, viewer) => {
+  if (buildingTileset && !buildingTileset.isDestroyed?.() && viewer.scene.primitives.contains(buildingTileset)) {
+    buildingTileset.show = true;
+    return buildingTileset;
+  }
+
+  buildingTileset = null;
+  let tileset = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3 && !tileset; attempt += 1) {
+    try {
+      tileset = await Cesium.createOsmBuildingsAsync({ enableShowOutline: false });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2 && !viewer.isDestroyed?.()) {
+        await waitForDelay(500 * (attempt + 1));
+      }
+    }
+  }
+  if (!tileset) throw lastError || new Error('3D 白模资源加载失败。');
+  if (viewer.isDestroyed?.()) {
+    tileset.destroy?.();
+    return null;
+  }
+  tileset.style = new Cesium.Cesium3DTileStyle({ color: "color('white', 0.92)" });
+  buildingTileset = markRaw(viewer.scene.primitives.add(tileset));
+  return buildingTileset;
+};
+
+const performMapModeTransition = async ({ mode, preservePreview }) => {
   const sequence = ++mapSwitchSequence;
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
-  const mode = mapMode.value;
-  mapLoading.value = true;
-  viewer.scene.screenSpaceCameraController.enableInputs = false;
   mapStatus.value = '';
   if (preservePreview) {
     stopRoutePreviewFrame();
@@ -1694,47 +1732,70 @@ const applyMapMode = async (options = {}) => {
   }
 
   try {
-    removeBuildingTileset();
-    await addImageryForMode(mode, Cesium, viewer);
+    await ensureBaseImagery(Cesium, viewer);
     if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
 
     if (mode === 'buildings') {
-      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
+      viewer.terrainProvider = ellipsoidTerrainProvider;
       const entered3D = await ensureScene3D(viewer, Cesium);
       if (!entered3D) {
         throw new Error('无法切换到 3D 场景，白模未加载。');
       }
       if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
-      const tileset = await Cesium.createOsmBuildingsAsync({
-        enableShowOutline: false
-      });
+      const tileset = await ensureBuildingTileset(Cesium, viewer);
       if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) {
-        tileset.destroy?.();
         return;
       }
-      tileset.style = new Cesium.Cesium3DTileStyle({
-        color: "color('white', 0.92)"
-      });
-      buildingTileset = markRaw(viewer.scene.primitives.add(tileset));
+      if (!tileset) throw new Error('3D 白模资源已失效。');
       mapStatus.value = 'ArcGIS 影像 · OSM 3D 白模 · 无地形';
     } else {
-      const terrainProvider = await Cesium.createWorldTerrainAsync();
+      hideBuildingTileset();
+      standardTerrainProvider ||= markRaw(await Cesium.createWorldTerrainAsync());
       if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
-      viewer.terrainProvider = terrainProvider;
+      viewer.terrainProvider = standardTerrainProvider;
       mapStatus.value = 'ArcGIS 影像 · WGS84 · Cesium 地形';
     }
   } catch (error) {
     if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
     console.warn(`Failed to load ${mode} map mode.`, error);
     if (mode === 'buildings') {
-      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      hideBuildingTileset();
+      ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
+      viewer.terrainProvider = ellipsoidTerrainProvider;
       mapStatus.value = '3D 白模加载失败，请检查网络或 Cesium Token';
     } else {
-      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
+      viewer.terrainProvider = ellipsoidTerrainProvider;
       mapStatus.value = '地形加载失败，已切换为椭球地面';
     }
+  }
+};
+
+const applyMapMode = async (options = {}) => {
+  if (!viewerInstance.value || !cesiumInstance.value) return;
+  queuedMapRequest = {
+    mode: options?.mode || mapMode.value,
+    preservePreview: options?.preservePreview === true
+  };
+  if (activeMapSwitchPromise) return activeMapSwitchPromise;
+
+  const viewer = viewerInstance.value;
+  mapLoading.value = true;
+  viewer.scene.screenSpaceCameraController.enableInputs = false;
+  activeMapSwitchPromise = (async () => {
+    while (queuedMapRequest && viewerInstance.value === viewer && !viewer.isDestroyed?.()) {
+      const request = queuedMapRequest;
+      queuedMapRequest = null;
+      await performMapModeTransition(request);
+    }
+  })();
+
+  try {
+    await activeMapSwitchPromise;
   } finally {
-    if (sequence === mapSwitchSequence) {
+    activeMapSwitchPromise = null;
+    if (viewerInstance.value === viewer && !viewer.isDestroyed?.()) {
       mapLoading.value = false;
       enableSceneNavigation(viewer);
       viewer.scene.requestRender();
@@ -2832,6 +2893,12 @@ const toggleSceneMode = async () => {
     if (viewerInstance.value !== viewer) return;
   }
 
+  if (!isCurrently2D && buildingTileset) {
+    removeBuildingTileset();
+    await waitForNextFrame();
+    if (viewerInstance.value !== viewer) return;
+  }
+
   const switched = isCurrently2D
     ? await ensureScene3D(viewer, Cesium)
     : await ensureScene2D(viewer, Cesium);
@@ -3020,8 +3087,36 @@ const updateVirtualFlight = async (dronePos, gimbalAtt, focalLength) => {
 };
 
 const flyTo = (c) => {
-  if (!viewerInstance.value) return;
-  viewerInstance.value.camera.flyTo({ destination: cesiumInstance.value.Cartesian3.fromDegrees(c.lng, c.lat, viewerInstance.value.camera.positionCartographic.height) });
+  const viewer = viewerInstance.value;
+  const Cesium = cesiumInstance.value;
+  if (!viewer || !Cesium || mapLoading.value || c?.lng == null || c?.lat == null) return;
+
+  const groundHeight = viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(c.lng, c.lat)) || 0;
+  const targetHeight = groundHeight + Math.max(0, Number(c.height || 0));
+  const target = Cesium.Cartesian3.fromDegrees(c.lng, c.lat, targetHeight);
+  const cameraHeight = Number(viewer.camera.positionCartographic?.height || 1000);
+  if (viewer.scene.mode === Cesium.SceneMode.SCENE2D) {
+    camera.value = {
+      position: { lng: c.lng, lat: c.lat, height: cameraHeight },
+      heading: 0,
+      pitch: -90,
+      roll: 0
+    };
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(c.lng, c.lat, cameraHeight),
+      duration: 0.8
+    });
+    return;
+  }
+
+  const currentPitch = Number(viewer.camera.pitch);
+  const pitch = Number.isFinite(currentPitch) ? currentPitch : Cesium.Math.toRadians(-35);
+  const range = Math.max(100, Math.min(20000000, cameraHeight - targetHeight));
+
+  viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 1), {
+    offset: new Cesium.HeadingPitchRange(viewer.camera.heading || 0, pitch, range),
+    duration: 0.8
+  });
 };
 
 const getCurrentPose = () => {
@@ -3049,6 +3144,10 @@ const resetTo2D = async () => {
     await applyMapMode({ preservePreview: true });
   }
   if (!viewerInstance.value || viewerInstance.value.scene.mode === cesiumInstance.value.SceneMode.SCENE2D) return;
+  if (buildingTileset) {
+    removeBuildingTileset();
+    await waitForNextFrame();
+  }
   await ensureScene2D();
   if (previewReady.value) updateRoutePreviewPosition(previewDistance);
 };
@@ -3190,8 +3289,12 @@ onBeforeUnmount(() => {
   remove2DFrustumGuard = null;
   remove2DRenderErrorRecovery = null;
   mapSwitchSequence += 1;
+  queuedMapRequest = null;
   invalidateRoutePreview();
   removeBuildingTileset();
+  baseImageryLayer = null;
+  standardTerrainProvider = null;
+  ellipsoidTerrainProvider = null;
   clearFov();
   if (eventHandler.value) {
     try {
