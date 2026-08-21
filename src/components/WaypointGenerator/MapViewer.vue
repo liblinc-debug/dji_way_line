@@ -575,8 +575,8 @@
     >
       <div class="flex items-center justify-between gap-3">
         <div>
-          <div class="text-sm font-bold">航线贴楼飞行预览</div>
-          <div class="mt-0.5 text-[10px] text-gray-400">走廊精细采样，按“直上 → 平飞 → 直下”越障；不会修改导出航点</div>
+          <div class="text-sm font-bold">地形与建筑飞行预览</div>
+          <div class="mt-0.5 text-[10px] text-gray-400">联合采样山地与建筑表面；实时仿地模式保持规划的相对高度</div>
         </div>
         <button
           type="button"
@@ -1746,8 +1746,9 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
     if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
 
     if (mode === 'buildings') {
-      ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
-      viewer.terrainProvider = ellipsoidTerrainProvider;
+      standardTerrainProvider ||= markRaw(await Cesium.createWorldTerrainAsync());
+      if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
+      viewer.terrainProvider = standardTerrainProvider;
       const entered3D = await ensureScene3D(viewer, Cesium);
       if (!entered3D) {
         throw new Error('无法切换到 3D 场景，白模未加载。');
@@ -1758,7 +1759,7 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
         return;
       }
       if (!tileset) throw new Error('3D 白模资源已失效。');
-      mapStatus.value = 'ArcGIS 影像 · OSM 3D 白模 · 无地形';
+      mapStatus.value = 'ArcGIS 影像 · Cesium 地形 · OSM 3D 白模';
     } else {
       hideBuildingTileset();
       standardTerrainProvider ||= markRaw(await Cesium.createWorldTerrainAsync());
@@ -1772,9 +1773,14 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
     mapLoadFailed.value = true;
     if (mode === 'buildings') {
       hideBuildingTileset();
-      ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
-      viewer.terrainProvider = ellipsoidTerrainProvider;
-      mapStatus.value = '3D 白模加载失败，请检查网络或 Cesium Token';
+      if (standardTerrainProvider) {
+        viewer.terrainProvider = standardTerrainProvider;
+        mapStatus.value = '3D 白模加载失败，Cesium 地形仍可使用';
+      } else {
+        ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
+        viewer.terrainProvider = ellipsoidTerrainProvider;
+        mapStatus.value = '地形与 3D 白模加载失败，请检查网络或 Cesium Token';
+      }
     } else {
       ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
       viewer.terrainProvider = ellipsoidTerrainProvider;
@@ -2015,14 +2021,31 @@ const sampleRouteCorridorHeights = async (cartographics, Cesium, viewer) => {
       return offsetCartographic;
     });
   });
-  const sampledCorridor = await viewer.scene.sampleHeightMostDetailed(corridorGroups.flat());
+  const corridorPoints = corridorGroups.flat();
+  const terrainSamples = await Cesium.sampleTerrainMostDetailed(
+    viewer.terrainProvider,
+    corridorPoints.map(point => Cesium.Cartographic.clone(point))
+  ).catch((error) => {
+    console.warn('Failed to sample detailed terrain for route preview.', error);
+    return corridorPoints.map(point => Cesium.Cartographic.clone(point));
+  });
+  const sceneSamples = await viewer.scene.sampleHeightMostDetailed(
+    corridorPoints.map(point => Cesium.Cartographic.clone(point))
+  ).catch((error) => {
+    console.warn('Failed to sample buildings for route preview.', error);
+    return corridorPoints.map(point => Cesium.Cartographic.clone(point));
+  });
   const pointsPerGroup = localOffsets.length;
 
   return corridorGroups.map((group, groupIndex) => {
     const heights = group.map((fallbackPoint, pointIndex) => {
-      const sampledPoint = sampledCorridor[groupIndex * pointsPerGroup + pointIndex] || fallbackPoint;
-      if (Number.isFinite(sampledPoint?.height)) return Number(sampledPoint.height);
-      return Number(viewer.scene.globe.getHeight(sampledPoint || fallbackPoint)) || 0;
+      const sampleIndex = groupIndex * pointsPerGroup + pointIndex;
+      const terrainHeight = Number(terrainSamples[sampleIndex]?.height);
+      const sceneHeight = Number(sceneSamples[sampleIndex]?.height);
+      const cachedTerrainHeight = Number(viewer.scene.globe.getHeight(fallbackPoint));
+      return [terrainHeight, sceneHeight, cachedTerrainHeight, 0]
+        .filter(Number.isFinite)
+        .reduce((maximum, height) => Math.max(maximum, height), 0);
     });
     return Math.max(0, ...heights);
   });
@@ -2040,12 +2063,14 @@ const buildAvoidanceSamples = (resamplePlan, surfaceHeights, Cesium) => {
     }
     const plannedAltitude = Number(plan.plannedAbsoluteAltitude);
     const surfaceHeight = Number(surfaceHeights[index]) || 0;
+    const surfaceOffset = Number(plan.plannedSurfaceOffset);
+    const followsSurface = props.executeHeightMode === 'realTimeFollowSurface';
     return {
       cartographic: plan.cartographic,
       distance: cumulativeDistance,
-      baselineAltitude: Number.isFinite(plannedAltitude)
-        ? plannedAltitude
-        : surfaceHeight + ROUTE_CLEARANCE_METERS,
+      baselineAltitude: followsSurface
+        ? surfaceHeight + (Number.isFinite(surfaceOffset) ? surfaceOffset : ROUTE_CLEARANCE_METERS)
+        : (Number.isFinite(plannedAltitude) ? plannedAltitude : surfaceHeight + ROUTE_CLEARANCE_METERS),
       surfaceHeight,
       cameraState: plan.cameraState
     };
@@ -2075,7 +2100,7 @@ const prepareRoutePreview = async () => {
       throw new Error('3D 白模尚未加载完成，请检查网络或 Cesium Token。');
     }
     if (!await ensureScene3D(viewer, Cesium)) {
-      throw new Error('无法进入 3D 场景，不能生成贴楼预览。');
+      throw new Error('无法进入 3D 场景，不能生成地形与建筑联合预览。');
     }
     const resamplePlan = buildResamplePlan(Cesium);
     const cartographics = resamplePlan.map(sample => sample.cartographic);
@@ -2126,7 +2151,7 @@ const prepareRoutePreview = async () => {
     }
 
     previewRouteEntity = markRaw(viewer.entities.add({
-      name: '3D 白模贴楼预览航线',
+      name: '地形与建筑联合预览航线',
       polyline: {
         positions: previewPath,
         width: 5,
@@ -2194,7 +2219,7 @@ const prepareRoutePreview = async () => {
   } catch (error) {
     console.error('Failed to prepare building-aware route preview.', error);
     invalidateRoutePreview();
-    previewError.value = error?.message || '航线贴楼采样失败，请确认 3D 白模已加载。';
+    previewError.value = error?.message || '地形与建筑采样失败，请确认 Cesium 地形和 3D 白模已加载。';
   } finally {
     previewPreparing.value = false;
   }

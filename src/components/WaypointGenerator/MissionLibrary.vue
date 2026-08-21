@@ -6,7 +6,16 @@
         <div class="flex items-center gap-1">
           <input ref="importInput" class="hidden" type="file" accept=".kmz,.json,application/json,application/vnd.google-earth.kmz"
             @change="handleImportFile" />
-          <a-button type="text" size="small" title="导入 KMZ/JSON 航线" @click="importInput?.click()">导入</a-button>
+          <a-tooltip title="导入航线（支持 KMZ/JSON）">
+            <a-button type="text" size="small" aria-label="导入航线" @click="importInput?.click()">
+              <template #icon>
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+                </svg>
+              </template>
+            </a-button>
+          </a-tooltip>
           <a-button type="text" size="small" title="新增航线" @click="$emit('create')">
             <template #icon><span class="text-lg">+</span></template>
           </a-button>
