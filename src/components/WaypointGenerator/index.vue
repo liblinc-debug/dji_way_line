@@ -14,6 +14,7 @@
         :geometry-config="activeMapData.geometryConfig"
         :slope-config="activeMapData.slopeConfig"
         :left-overlay-offset="activeMapData.leftOverlayOffset"
+        :right-overlay-offset="currentView === 'editor' && editingMission ? 360 : 0"
         @update:takeoffHeight="handleTakeoffHeightUpdate" @map-click="onMapClick" @insert-waypoint="onInsertWaypoint"
         @waypoint-move="onWaypointMove"
         class="h-full w-full" />

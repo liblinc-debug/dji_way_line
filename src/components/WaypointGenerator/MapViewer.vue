@@ -4,10 +4,6 @@
       :access-token="cesiumAccessToken" :animation="false" :timeline="false" :base-layer-picker="false"
       :fullscreen-button="false" :scene-mode-picker="false" :info-box="false" :selection-indicator="false"
       class="absolute inset-0">
-      <vc-navigation></vc-navigation>
-      <vc-compass-sm :auto-hidden="false" position="bottom" :offset="[200, 20]"></vc-compass-sm>
-      <vc-zoom-control-sm position="bottom" :offset="[380, 60]"></vc-zoom-control-sm>
-
       <template v-if="cesiumInstance">
         <!-- Enhanced 3D Waypoints with Measurement HUD (只用于航点模式) -->
         <template v-if="props.routeType === 'waypoint' && (enhancedWaypoints || []).length > 0">
@@ -567,6 +563,26 @@
         @click="retryMapLoad">重新加载</button>
     </div>
 
+    <div v-if="previewTelemetryVisible && previewReady"
+      class="absolute top-16 z-30 w-[286px] overflow-hidden rounded-xl border border-cyan-300/25 bg-[#07111de8] text-white shadow-2xl backdrop-blur-xl pointer-events-auto"
+      :style="telemetryPanelStyle" @click.stop>
+      <div class="flex items-center justify-between border-b border-white/10 px-3 py-2.5">
+        <div class="flex items-center gap-2">
+          <span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"></span>
+          <div><div class="text-xs font-bold">飞行姿态</div><div class="text-[9px] text-slate-400">{{ previewTelemetry.status }}</div></div>
+        </div>
+        <button type="button" aria-label="关闭飞行姿态浮窗" title="关闭"
+          class="grid h-6 w-6 place-items-center rounded text-sm text-slate-400 hover:bg-white/10 hover:text-white"
+          @click="previewTelemetryVisible = false">×</button>
+      </div>
+      <div class="grid grid-cols-2 gap-px bg-white/10">
+        <div v-for="item in previewTelemetry.items" :key="item.label" class="bg-[#0b1725] px-3 py-2.5">
+          <div class="text-[9px] text-slate-400">{{ item.label }}</div>
+          <div class="mt-0.5 font-mono text-sm font-bold" :class="item.color">{{ item.value }}</div>
+        </div>
+      </div>
+    </div>
+
     <div
       v-if="canPreviewRoute"
       class="absolute top-16 z-30 w-[360px] rounded-xl border border-white/20 bg-black/70 p-3 text-white shadow-2xl backdrop-blur-md pointer-events-auto"
@@ -722,6 +738,7 @@ const props = defineProps({
   geometryConfig: { type: Object, default: () => ({}) },
   slopeConfig: { type: Object, default: () => ({}) },
   leftOverlayOffset: { type: Number, default: 0 },
+  rightOverlayOffset: { type: Number, default: 0 },
   previewMode: { type: String, default: 'idle' }
 });
 
@@ -759,6 +776,10 @@ const previewTotalDistance = ref(0);
 const previewAltitudeAdjustedCount = ref(0);
 const previewMaxAltitudeAdjustment = ref(0);
 const previewAvoidanceSegmentCount = ref(0);
+const previewTelemetryVisible = ref(false);
+const previewCurrentSurfaceHeight = ref(0);
+const previewHeadingDegrees = ref(0);
+const previewAircraftPitch = ref(0);
 const manualFlightActiveKeys = ref([]);
 const manualFlightHeadingDegrees = ref(0);
 const manualFlightAltitude = ref(0);
@@ -847,6 +868,9 @@ const undergroundRouteDepthFailMaterial = computed(() => createDashedRouteMateri
 const mapControlStyle = computed(() => ({
   left: `${Math.max(16, Number(props.leftOverlayOffset) + 16)}px`
 }));
+const telemetryPanelStyle = computed(() => ({
+  right: `${Math.max(16, Number(props.rightOverlayOffset) + 16)}px`
+}));
 const canPreviewRoute = computed(() => (
   props.routeType === 'waypoint'
   && !props.isPatrolMode
@@ -876,6 +900,30 @@ const resolvedObstacleAvoidance = computed(() => ({
   ...(props.obstacleAvoidance || {})
 }));
 const previewFocalLength = computed(() => 24 * previewZoomFactor.value);
+const previewTelemetry = computed(() => {
+  const Cesium = cesiumInstance.value;
+  const position = routePreviewDronePosition.value;
+  const cartographic = Cesium && position ? Cesium.Cartographic.fromCartesian(position) : null;
+  const absoluteAltitude = Number(cartographic?.height) || 0;
+  const relativeAltitude = absoluteAltitude - (Number(previewCurrentSurfaceHeight.value) || 0);
+  const manualMoving = manualFlightActiveKeys.value.length > 0;
+  const currentSpeed = previewViewMode.value === 'manual'
+    ? (manualMoving ? Number(previewSpeed.value) || 0 : 0)
+    : (previewPlaying.value ? Number(previewSpeed.value) || 0 : 0);
+  return {
+    status: previewViewMode.value === 'manual'
+      ? (manualMoving ? '手动飞行中' : '手动飞行待命')
+      : (previewPlaying.value ? '航线模拟飞行中' : (previewFinished.value ? '模拟飞行已完成' : '模拟飞行已暂停')),
+    items: [
+      { label: '海拔高度 ASL', value: `${absoluteAltitude.toFixed(1)} m`, color: 'text-cyan-300' },
+      { label: '相对高度 AGL', value: `${relativeAltitude.toFixed(1)} m`, color: 'text-emerald-300' },
+      { label: '飞行速度', value: `${currentSpeed.toFixed(1)} m/s`, color: 'text-blue-300' },
+      { label: '飞机航向', value: `${previewHeadingDegrees.value.toFixed(1)}°`, color: 'text-amber-300' },
+      { label: '飞机俯仰角', value: `${previewAircraftPitch.value.toFixed(1)}°`, color: 'text-violet-300' },
+      { label: '云台俯仰角', value: `${previewGimbalPitch.value.toFixed(1)}°`, color: 'text-fuchsia-300' }
+    ]
+  };
+});
 const manualFlightKeyLabels = {
   KeyW: 'W 升高',
   KeyS: 'S 降低',
@@ -1869,6 +1917,9 @@ const removePreviewEntities = () => {
   routePreviewZoomFovData.value = { points: [], rawPoints: [] };
   previewGimbalPitch.value = -45;
   previewZoomFactor.value = 1;
+  previewCurrentSurfaceHeight.value = 0;
+  previewHeadingDegrees.value = 0;
+  previewAircraftPitch.value = 0;
 };
 
 const invalidateRoutePreview = () => {
@@ -1889,6 +1940,7 @@ const invalidateRoutePreview = () => {
   previewFinished.value = false;
   previewError.value = '';
   previewPathVersion.value = 0;
+  previewTelemetryVisible.value = false;
 };
 
 const interpolateNumber = (start, end, fraction, fallback = 0) => {
@@ -2239,6 +2291,14 @@ const getPreviewHeading = (position, nextPosition, Cesium) => {
   return Math.atan2(localNext.x, localNext.y);
 };
 
+const getPreviewPitch = (position, nextPosition, Cesium) => {
+  const transform = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+  const inverse = Cesium.Matrix4.inverseTransformation(transform, new Cesium.Matrix4());
+  const localNext = Cesium.Matrix4.multiplyByPoint(inverse, nextPosition, new Cesium.Cartesian3());
+  const horizontalDistance = Math.hypot(localNext.x, localNext.y);
+  return Math.atan2(localNext.z, Math.max(0.001, horizontalDistance));
+};
+
 const getPreviewCameraState = (segmentIndex, fraction) => {
   const start = previewCameraStates[segmentIndex] || { pitch: -45, zoomFactor: 1, yaw: 0 };
   const end = previewCameraStates[segmentIndex + 1] || start;
@@ -2371,6 +2431,9 @@ const followPreviewCamera = (position, nextPosition, cameraState) => {
   const heading = Number.isFinite(Number(cameraState?.yaw))
     ? Cesium.Math.toRadians(normalizeHeadingDegrees(cameraState.yaw))
     : routeHeading;
+  const pitch = getPreviewPitch(position, nextPosition, Cesium);
+  previewHeadingDegrees.value = normalizeHeadingDegrees(Cesium.Math.toDegrees(heading));
+  previewAircraftPitch.value = Cesium.Math.toDegrees(pitch);
   previewVisualPosition = position;
   const localDirection = new Cesium.Cartesian3(Math.sin(heading), Math.cos(heading), 0);
   const localFrame = Cesium.Transforms.eastNorthUpToFixedFrame(position);
@@ -2484,6 +2547,7 @@ const updateRoutePreviewPosition = (distance) => {
     fraction,
     0
   );
+  previewCurrentSurfaceHeight.value = surfaceHeight;
   previewProgress.value = total > 0 ? (previewDistance / total) * 100 : 0;
   followPreviewCamera(position, previewPath[segmentIndex + 1], cameraState);
   updateRoutePreviewFov(
@@ -2568,6 +2632,7 @@ const updateManualFlightVisual = (position, surfaceHeight) => {
   };
   const cartographic = Cesium.Cartographic.fromCartesian(position);
   manualFlightAltitude.value = Number(cartographic?.height) || 0;
+  previewCurrentSurfaceHeight.value = Number(surfaceHeight) || 0;
   followPreviewCamera(position, headingTip, cameraState);
   updateRoutePreviewFov(position, cameraState, surfaceHeight, false);
   viewerInstance.value?.scene?.requestRender?.();
@@ -2707,6 +2772,7 @@ const toggleRoutePreview = () => {
     updateRoutePreviewPosition(0);
   }
   previewPlaying.value = true;
+  previewTelemetryVisible.value = true;
   previewLastTimestamp = 0;
   previewRafId = requestAnimationFrame(runRoutePreviewFrame);
 };
@@ -3301,6 +3367,7 @@ watch(previewViewMode, (mode, previousMode) => {
     previewCameraFollowMode = 'idle';
     unlockPreviewCamera();
     initializeManualFlight();
+    previewTelemetryVisible.value = true;
     nextTick(() => {
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       mapRootRef.value?.focus?.({ preventScroll: true });
@@ -3311,6 +3378,7 @@ watch(previewViewMode, (mode, previousMode) => {
     clearManualFlightKeys();
     manualFlightSafetyState.value = '';
     previewCameraFollowMode = 'idle';
+    previewTelemetryVisible.value = false;
   }
   if (mode === 'user') {
     unlockPreviewCamera();
