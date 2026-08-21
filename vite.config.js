@@ -16,5 +16,14 @@ export default defineConfig({
       'vue': path.resolve(__dirname, './node_modules/vue'),
       '@vue/shared': path.resolve(__dirname, './node_modules/@vue/shared'),
     }
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8090',
+        changeOrigin: true,
+        rewrite: requestPath => requestPath.replace(/^\/api/, '')
+      }
+    }
   }
 })

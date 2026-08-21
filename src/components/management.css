@@ -25,6 +25,7 @@
 .resource-table tbody tr:hover { background: #f8faff; }
 .resource-table td strong { display: block; color: #1d293d; font-size: 12px; }
 .resource-table td small { display: block; margin-top: 2px; color: #98a3b3; font-size: 10px; }
+.description-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .check-cell { width: 28px; text-align: center !important; }
 .action-cell { width: 106px; text-align: right !important; white-space: nowrap; }
 .capability-tags { display: flex; align-items: center; gap: 3px; color: #a0a9b7; }

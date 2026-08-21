@@ -562,6 +562,9 @@
       </select>
       <span v-if="mapLoading" class="text-amber-300">加载中…</span>
       <span v-else-if="mapStatus" class="max-w-52 truncate text-gray-300" :title="mapStatus">{{ mapStatus }}</span>
+      <button v-if="mapLoadFailed && !mapLoading" type="button"
+        class="rounded bg-red-500/80 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-400"
+        @click="retryMapLoad">重新加载</button>
     </div>
 
     <div
@@ -657,8 +660,13 @@
           <select v-model="previewViewMode" class="ml-auto rounded border border-white/20 bg-black/50 px-2 py-1.5 text-xs text-white outline-none">
             <option value="first">第一人称</option>
             <option value="third">第三人称</option>
+            <option value="user">用户视角</option>
             <option value="manual">手动飞行</option>
           </select>
+        </div>
+
+        <div v-if="previewViewMode === 'user'" class="mt-2 rounded bg-violet-400/10 px-2 py-1.5 text-[11px] text-violet-100">
+          用户视角不会自动锁定机头；可用鼠标旋转、平移和缩放地图，飞行过程中保持你调整后的观察视角。
         </div>
 
         <div v-if="previewViewMode === 'manual'"
@@ -737,6 +745,7 @@ const hasAutoLocated = ref(false);
 const mapMode = ref('standard');
 const mapLoading = ref(false);
 const mapStatus = ref('ArcGIS 影像 · WGS84 · Cesium 地形');
+const mapLoadFailed = ref(false);
 const draggedWaypointIndex = ref(-1);
 const previewPreparing = ref(false);
 const previewError = ref('');
@@ -1724,6 +1733,7 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
   mapStatus.value = '';
+  mapLoadFailed.value = false;
   if (preservePreview) {
     stopRoutePreviewFrame();
     unlockPreviewCamera();
@@ -1759,6 +1769,7 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
   } catch (error) {
     if (sequence !== mapSwitchSequence || viewerInstance.value !== viewer) return;
     console.warn(`Failed to load ${mode} map mode.`, error);
+    mapLoadFailed.value = true;
     if (mode === 'buildings') {
       hideBuildingTileset();
       ellipsoidTerrainProvider ||= markRaw(new Cesium.EllipsoidTerrainProvider());
@@ -1770,6 +1781,13 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
       mapStatus.value = '地形加载失败，已切换为椭球地面';
     }
   }
+};
+
+const retryMapLoad = async () => {
+  if (mapLoading.value) return;
+  mapLoadFailed.value = false;
+  if (mapMode.value === 'buildings') removeBuildingTileset();
+  await applyMapMode({ mode: mapMode.value, preservePreview: previewReady.value });
 };
 
 const applyMapMode = async (options = {}) => {
@@ -2345,6 +2363,13 @@ const followPreviewCamera = (position, nextPosition, cameraState) => {
   const showAircraftMarker = is2D || previewViewMode.value !== 'first';
   if (previewDroneEntity) previewDroneEntity.show = showAircraftMarker;
   if (previewHeadingEntity) previewHeadingEntity.show = showAircraftMarker;
+
+  if (previewViewMode.value === 'user') {
+    previewCameraFollowMode = 'user';
+    updatePreviewScreenRotation(viewer, Cesium);
+    viewer.scene.requestRender();
+    return;
+  }
 
   if (is2D) {
     capture2DFrustumWidth(viewer);
@@ -3262,6 +3287,10 @@ watch(previewViewMode, (mode, previousMode) => {
     manualFlightSafetyState.value = '';
     previewCameraFollowMode = 'idle';
   }
+  if (mode === 'user') {
+    unlockPreviewCamera();
+    previewCameraFollowMode = 'user';
+  }
   updateRoutePreviewPosition(previewDistance);
 });
 
@@ -3310,7 +3339,7 @@ onBeforeUnmount(() => {
   cesiumInstance.value = null;
 });
 
-defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, sceneMode, mapMode, mapLoading, clearFov, clearVirtualFlight });
+defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D, toggleSceneMode, retryMapLoad, sceneMode, mapMode, mapLoading, mapLoadFailed, clearFov, clearVirtualFlight });
 </script>
 
 <style scoped>

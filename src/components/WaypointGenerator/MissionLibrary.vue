@@ -3,9 +3,14 @@
     <div class="p-4 bg-gray-50 border-b border-gray-200">
       <div class="flex justify-between items-center mb-3">
         <h2 class="m-0 text-base font-medium text-gray-900">航线库</h2>
-        <a-button type="text" size="small" @click="$emit('create')">
-          <template #icon><span class="text-lg">+</span></template>
-        </a-button>
+        <div class="flex items-center gap-1">
+          <input ref="importInput" class="hidden" type="file" accept=".kmz,.json,application/json,application/vnd.google-earth.kmz"
+            @change="handleImportFile" />
+          <a-button type="text" size="small" title="导入 KMZ/JSON 航线" @click="importInput?.click()">导入</a-button>
+          <a-button type="text" size="small" title="新增航线" @click="$emit('create')">
+            <template #icon><span class="text-lg">+</span></template>
+          </a-button>
+        </div>
       </div>
 
       <div class="grid grid-cols-2 gap-2">
@@ -115,12 +120,19 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['create', 'select', 'edit', 'delete', 'download', 'rename']);
+const emit = defineEmits(['create', 'select', 'edit', 'delete', 'download', 'rename', 'import']);
 
 const activeModelFilter = ref('all');
 const sortOrder = ref('desc');
 const editingMissionId = ref(null);
 const draftMissionName = ref('');
+const importInput = ref(null);
+
+const handleImportFile = (event) => {
+  const file = event.target.files?.[0];
+  if (file) emit('import', file);
+  event.target.value = '';
+};
 
 const startRename = (mission) => {
   editingMissionId.value = mission.id;

@@ -12,12 +12,12 @@ const keyword = ref('')
 const statusFilter = ref('all')
 const selectedIds = ref([])
 const editingId = ref('')
-const form = reactive({ aircraftId: '', name: '', modelCode: '', ipAddr: '', status: 'offline' })
+const form = reactive({ aircraftId: '', name: '', modelCode: '', ipAddr: '', description: '', status: 'offline' })
 
 const filteredAircrafts = computed(() => {
   const query = keyword.value.trim().toLowerCase()
   return aircrafts.value.filter((item) => {
-    const matchesQuery = !query || [item.aircraftId, item.name, item.modelCode, item.ipAddr].some((value) => String(value || '').toLowerCase().includes(query))
+    const matchesQuery = !query || [item.aircraftId, item.name, item.modelCode, item.ipAddr, item.description].some((value) => String(value || '').toLowerCase().includes(query))
     return matchesQuery && (statusFilter.value === 'all' || item.status === statusFilter.value)
   })
 })
@@ -45,12 +45,12 @@ async function loadData() {
 
 function resetForm() {
   editingId.value = ''
-  Object.assign(form, { aircraftId: '', name: '', modelCode: '', ipAddr: '', status: 'offline' })
+  Object.assign(form, { aircraftId: '', name: '', modelCode: '', ipAddr: '', description: '', status: 'offline' })
 }
 
 function editAircraft(item) {
   editingId.value = item.aircraftId
-  Object.assign(form, { aircraftId: item.aircraftId, name: item.name || '', modelCode: item.modelCode || '', ipAddr: item.ipAddr || '', status: item.status || 'offline' })
+  Object.assign(form, { aircraftId: item.aircraftId, name: item.name || '', modelCode: item.modelCode || '', ipAddr: item.ipAddr || '', description: item.description || '', status: item.status || 'offline' })
 }
 
 async function saveAircraft() {
@@ -63,7 +63,7 @@ async function saveAircraft() {
   try {
     await taskApiRequest(editingId.value ? `/aircrafts/${encodeResourceId(editingId.value)}` : '/aircrafts', {
       method: editingId.value ? 'PUT' : 'POST',
-      body: JSON.stringify({ aircraftId: form.aircraftId.trim(), name: form.name.trim(), modelCode: form.modelCode, ipAddr: form.ipAddr.trim(), status: form.status })
+      body: JSON.stringify({ aircraftId: form.aircraftId.trim(), name: form.name.trim(), modelCode: form.modelCode, ipAddr: form.ipAddr.trim(), description: form.description.trim(), status: form.status })
     })
     message.success(editingId.value ? '飞机信息已更新' : '飞机资产已创建')
     resetForm()
@@ -127,7 +127,7 @@ onMounted(loadData)
           <div class="management-toolbar">
             <div><h2>飞机资产台账</h2><p>维护飞机身份、机型绑定、网络地址与运行状态</p></div>
             <div class="toolbar-actions">
-              <a-input-search v-model:value="keyword" allow-clear placeholder="搜索 ID、名称、机型或 IP" />
+              <a-input-search v-model:value="keyword" allow-clear placeholder="搜索 ID、名称、机型、IP 或描述" />
               <a-select v-model:value="statusFilter" class="status-filter"><a-select-option value="all">全部状态</a-select-option><a-select-option value="online">在线</a-select-option><a-select-option value="offline">离线</a-select-option><a-select-option value="maintenance">维护中</a-select-option></a-select>
               <a-button danger :disabled="!selectedIds.length" @click="batchRemove">批量删除</a-button>
               <a-button :loading="loading" @click="loadData">刷新</a-button>
@@ -136,17 +136,18 @@ onMounted(loadData)
 
           <div class="resource-table-wrap">
             <table class="resource-table">
-              <thead><tr><th class="check-cell"></th><th>飞机</th><th>绑定机型</th><th>网络地址</th><th>运行状态</th><th class="action-cell">操作</th></tr></thead>
+              <thead><tr><th class="check-cell"></th><th>飞机</th><th>绑定机型</th><th>网络地址</th><th>描述</th><th>运行状态</th><th class="action-cell">操作</th></tr></thead>
               <tbody>
                 <tr v-for="aircraft in filteredAircrafts" :key="aircraft.aircraftId">
                   <td class="check-cell"><a-checkbox :checked="selectedIds.includes(aircraft.aircraftId)" :disabled="aircraft.status === 'online'" @update:checked="toggleSelection(aircraft.aircraftId, $event)" /></td>
                   <td><strong>{{ aircraft.name || '-' }}</strong><small>{{ aircraft.aircraftId }}</small></td>
                   <td><span class="model-badge">{{ aircraft.modelCode || '未绑定' }}</span></td>
                   <td>{{ aircraft.ipAddr || '-' }}</td>
+                  <td class="description-cell" :title="aircraft.description || ''">{{ aircraft.description || '-' }}</td>
                   <td><span :class="['status-badge', aircraft.status]"><i></i>{{ aircraft.status === 'online' ? '在线' : aircraft.status === 'maintenance' ? '维护中' : '离线' }}</span></td>
                   <td class="action-cell"><a-button type="link" @click="editAircraft(aircraft)">编辑</a-button><a-button type="link" danger :disabled="aircraft.status === 'online'" @click="removeAircraft(aircraft)">删除</a-button></td>
                 </tr>
-                <tr v-if="!filteredAircrafts.length"><td colspan="6"><a-empty description="暂无匹配飞机" /></td></tr>
+                <tr v-if="!filteredAircrafts.length"><td colspan="7"><a-empty description="暂无匹配飞机" /></td></tr>
               </tbody>
             </table>
           </div>
@@ -159,6 +160,7 @@ onMounted(loadData)
             <label>展示名称 <b>*</b></label><a-input v-model:value="form.name" placeholder="例如 一号巡检机" />
             <label>绑定机型 <b>*</b></label><a-select v-model:value="form.modelCode" class="w-full" placeholder="选择机型"><a-select-option v-for="model in models" :key="model.modelCode" :value="model.modelCode">{{ model.modelCode }} · {{ model.modelName }}</a-select-option></a-select>
             <label>机载节点 IP</label><a-input v-model:value="form.ipAddr" placeholder="例如 192.168.1.20" />
+            <label>描述</label><a-textarea v-model:value="form.description" :maxlength="500" :rows="3" show-count placeholder="填写飞机用途、部署位置或备注信息" />
             <label>运行状态</label><a-segmented v-model:value="form.status" block :options="[{ label: '离线', value: 'offline' }, { label: '在线', value: 'online' }, { label: '维护中', value: 'maintenance' }]" />
             <a-button block type="primary" size="large" :loading="saving" @click="saveAircraft">{{ editingId ? '保存修改' : '创建飞机资产' }}</a-button>
             <a-button block @click="resetForm">{{ editingId ? '取消编辑' : '清空表单' }}</a-button>

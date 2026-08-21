@@ -25,7 +25,7 @@
         <div class="h-full w-[330px] shrink-0 border-r border-gray-200 bg-white shadow-lg pointer-events-auto">
           <MissionLibrary :missions="missions" :selected-id="previewMission?.id" @create="showCreateModal = true"
             @select="handlePreviewMission" @edit="selectMission" @delete="deleteMission" @download="downloadMission"
-            @rename="renameMission"
+            @rename="renameMission" @import="importMission"
             class="h-full" />
         </div>
         <!-- 右侧区域透明，显示地图 -->
@@ -70,8 +70,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { message } from 'ant-design-vue';
 import { generateKMZ } from '../../utils/kmzGenerator';
-import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson } from '../../utils/localWaylineFile';
+import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson, importWaylineFile } from '../../utils/localWaylineFile';
 import {
   getAircraftModelMeta,
   getV2CompatibleWaypointExportMeta
@@ -203,6 +204,17 @@ const toBackendTaskRequest = (mission = {}) => {
 
 const syncMissionToBackend = async (mission) => {
   try {
+    await request('/waylines', {
+      method: 'POST',
+      body: JSON.stringify(mission)
+    });
+  } catch (error) {
+    console.warn('Failed to persist wayline definition', error);
+    message.error(`航线保存到服务端失败：${error.message}`);
+    return false;
+  }
+
+  try {
     await request('/tasks', {
       method: 'POST',
       body: JSON.stringify(toBackendTaskRequest(mission))
@@ -210,8 +222,23 @@ const syncMissionToBackend = async (mission) => {
     return true;
   } catch (error) {
     console.warn('Failed to sync mission to backend', error);
-    errorText.value = `已保存本地航线，但同步到后端任务失败：${error.message}`;
-    return false;
+    message.warning(`航线定义已保存，执行任务同步失败：${error.message}`);
+  }
+  return true;
+};
+
+const loadMissionsFromBackend = async () => {
+  try {
+    const result = await request('/waylines');
+    const remote = Array.isArray(result?.items) ? result.items.map(normalizeMission) : [];
+    if (!remote.length) return;
+    const merged = new Map(missions.value.map(mission => [String(mission.id), mission]));
+    remote.forEach((mission) => merged.set(String(mission.id), mission));
+    missions.value = [...merged.values()];
+    saveMissionsToStorage();
+  } catch (error) {
+    console.warn('Failed to load waylines from backend', error);
+    message.warning(`服务端航线库读取失败，当前显示本地缓存：${error.message}`);
   }
 };
 
@@ -848,6 +875,7 @@ onMounted(() => {
   restoreUiStateFromStorage();
   window.addEventListener('message', handleIframeMessage);
   postParentMessage('wayline:ready', { version: '1.0.0' });
+  loadMissionsFromBackend();
 });
 
 onBeforeUnmount(() => {
@@ -977,10 +1005,43 @@ const handleWaylineGenerateError = (error = {}) => {
   });
 };
 
-const deleteMission = (id) => {
+const deleteMission = async (id) => {
   if (confirm('确定要删除该航线吗？')) {
     missions.value = missions.value.filter(m => m.id !== id);
     saveMissionsToStorage();
+    try {
+      await request(`/waylines/${encodeURIComponent(String(id))}`, { method: 'DELETE' });
+    } catch (error) {
+      console.warn('Failed to delete wayline from backend', error);
+      message.warning(`本地航线已删除，但服务端删除失败：${error.message}`);
+    }
+  }
+};
+
+const importMission = async (file) => {
+  try {
+    const imported = await importWaylineFile(file);
+    const importedAt = Date.now();
+    const name = String(imported.name || imported.config?.missionName || file.name.replace(/\.(kmz|json)$/i, '') || '导入航线');
+    const mission = normalizeMission({
+      ...imported,
+      id: `${importedAt}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      config: { ...defaultMissionConfig, ...(imported.config || {}), missionName: name },
+      waypoints: imported.waypoints || [],
+      scanPath: imported.scanPath || [],
+      coverageArea: imported.coverageArea || [],
+      cuttingSegments: imported.cuttingSegments || [],
+      updatedAt: importedAt
+    });
+    missions.value = [...missions.value, mission];
+    previewMission.value = mission;
+    saveMissionsToStorage();
+    const saved = await syncMissionToBackend(mission);
+    if (saved) message.success(`已导入航线“${name}”，共 ${mission.waypoints.length} 个航点`);
+  } catch (error) {
+    console.error('Failed to import wayline', error);
+    message.error(`导入失败：${error.message}`);
   }
 };
 
