@@ -590,8 +590,28 @@
       @click.stop
     >
       <div class="flex items-center justify-between gap-3">
-        <div>
-          <div class="text-sm font-bold">地形与建筑飞行预览</div>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <div class="text-sm font-bold">地形与建筑飞行预览</div>
+            <button
+              type="button"
+              class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-white/15 bg-white/5 text-gray-300 transition hover:border-cyan-300/40 hover:bg-white/15 hover:text-white"
+              :aria-label="isMapFullscreen ? '恢复地图窗口' : '全屏显示地图'"
+              :title="isMapFullscreen ? '恢复地图窗口' : '全屏显示地图'"
+              @click.stop="toggleMapFullscreen"
+            >
+              <svg v-if="!isMapFullscreen" viewBox="0 0 24 24" class="h-4 w-4" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" class="h-4 w-4" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                aria-hidden="true">
+                <path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5" />
+              </svg>
+            </button>
+          </div>
           <div class="mt-0.5 text-[10px] text-gray-400">联合采样山地与建筑表面；实时仿地模式保持规划的相对高度</div>
         </div>
         <button
@@ -751,6 +771,7 @@ const cesiumInstance = ref(null);
 const viewerInstance = ref(null);
 const eventHandler = ref(null);
 const mapRootRef = ref(null);
+const isMapFullscreen = ref(false);
 const sceneMode = ref(2); // 2: SCENE2D, 3: SCENE3D
 const isFovVisible = ref(false);
 const hoverPos = ref({ lat: 0, lng: 0, asl: 0, hae: 0 });
@@ -867,17 +888,24 @@ const createDashedRouteMaterial = (color, dashLength = 18) => {
 const undergroundRouteMaterial = computed(() => createDashedRouteMaterial('rgba(255, 122, 89, 0.95)'));
 const undergroundRouteDepthFailMaterial = computed(() => createDashedRouteMaterial('rgba(255, 122, 89, 0.55)'));
 
+const rightControlOffset = computed(() => (
+  isMapFullscreen.value
+    ? 16
+    : Math.max(16, Number(props.rightOverlayOffset) + 16)
+));
 const mapControlStyle = computed(() => ({
-  left: `${Math.max(16, Number(props.leftOverlayOffset) + 16)}px`
-}));
-const telemetryPanelStyle = computed(() => ({
-  right: `${Math.max(16, Number(props.rightOverlayOffset) + 16)}px`
+  right: `${rightControlOffset.value}px`,
+  left: 'auto'
 }));
 const canPreviewRoute = computed(() => (
   props.routeType === 'waypoint'
   && !props.isPatrolMode
   && props.waypoints.filter((point) => point?.lng != null && point?.lat != null).length >= 2
 ));
+const telemetryPanelStyle = computed(() => ({
+  left: `${isMapFullscreen.value ? 16 : Math.max(16, Number(props.leftOverlayOffset) + 16)}px`,
+  right: 'auto'
+}));
 const previewReady = computed(() => previewPathVersion.value > 0 && previewPath.length >= 2);
 const formatDuration = (seconds) => {
   const safeSeconds = Math.max(0, Math.round(Number(seconds) || 0));
@@ -1585,6 +1613,37 @@ const ROUTE_CORRIDOR_MIN_RADIUS_METERS = 3;
 
 const waitForNextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
 const waitForDelay = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+
+const getFullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+
+const handleMapFullscreenChange = () => {
+  isMapFullscreen.value = getFullscreenElement() === mapRootRef.value;
+  nextTick(() => {
+    viewerInstance.value?.resize?.();
+    viewerInstance.value?.scene?.requestRender?.();
+  });
+};
+
+const toggleMapFullscreen = async () => {
+  const mapRoot = mapRootRef.value;
+  if (!mapRoot) return;
+
+  try {
+    if (getFullscreenElement() === mapRoot) {
+      const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+      if (!exitFullscreen) throw new Error('当前浏览器不支持退出全屏。');
+      await exitFullscreen.call(document);
+    } else {
+      const requestFullscreen = mapRoot.requestFullscreen || mapRoot.webkitRequestFullscreen;
+      if (!requestFullscreen) throw new Error('当前浏览器不支持地图全屏。');
+      await requestFullscreen.call(mapRoot);
+    }
+    handleMapFullscreenChange();
+  } catch (error) {
+    console.warn('Failed to toggle map fullscreen.', error);
+    message.error(error?.message || '地图全屏切换失败，请检查浏览器权限。');
+  }
+};
 
 const sanitize2DFrustum = (viewer = viewerInstance.value, Cesium = cesiumInstance.value) => {
   if (!viewer || !Cesium || viewer.isDestroyed?.() || viewer.scene.mode !== Cesium.SceneMode.SCENE2D) {
@@ -3429,6 +3488,8 @@ onMounted(() => {
   window.addEventListener('keyup', handleManualFlightKeyUp, { capture: true, passive: false });
   window.addEventListener('blur', clearManualFlightKeys);
   document.addEventListener('visibilitychange', handleManualFlightVisibility);
+  document.addEventListener('fullscreenchange', handleMapFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', handleMapFullscreenChange);
 });
 
 onBeforeUnmount(() => {
@@ -3436,6 +3497,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', handleManualFlightKeyUp, true);
   window.removeEventListener('blur', clearManualFlightKeys);
   document.removeEventListener('visibilitychange', handleManualFlightVisibility);
+  document.removeEventListener('fullscreenchange', handleMapFullscreenChange);
+  document.removeEventListener('webkitfullscreenchange', handleMapFullscreenChange);
   if (finishWaypointDragListener) {
     window.removeEventListener('pointerup', finishWaypointDragListener);
     window.removeEventListener('blur', finishWaypointDragListener);
