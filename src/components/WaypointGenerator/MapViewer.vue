@@ -718,6 +718,7 @@ import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
 import { createDronePreviewIcons } from '../../utils/dronePreviewIcon.js';
 import { buildVerticalAvoidanceProfile } from '../../utils/verticalAvoidance.js';
+import { resolveCorridorHeightSample } from '../../utils/terrainObstacle.js';
 import { PLANE_SVG } from './constants';
 
 // --- 1. Props & Emits ---
@@ -798,6 +799,7 @@ let previewHeadingEntity = null;
 let previewPath = [];
 let previewCameraStates = [];
 let previewSurfaceHeights = [];
+let previewTerrainHeights = [];
 let previewCumulativeDistances = [];
 let previewDistance = 0;
 let previewRafId = 0;
@@ -1930,6 +1932,7 @@ const invalidateRoutePreview = () => {
   previewPath = [];
   previewCameraStates = [];
   previewSurfaceHeights = [];
+  previewTerrainHeights = [];
   previewCumulativeDistances = [];
   previewDistance = 0;
   previewTotalDistance.value = 0;
@@ -2046,7 +2049,7 @@ const flyCameraToRoute = (cartographics, Cesium, viewer) => new Promise((resolve
   });
 });
 
-const sampleRouteCorridorHeights = async (cartographics, Cesium, viewer) => {
+const sampleRouteCorridorHeights = async (cartographics, Cesium, viewer, objectsToExclude = []) => {
   const configuredRadius = Number(resolvedObstacleAvoidance.value.horizontalClearance);
   const corridorRadius = Math.max(
     ROUTE_CORRIDOR_MIN_RADIUS_METERS,
@@ -2079,31 +2082,50 @@ const sampleRouteCorridorHeights = async (cartographics, Cesium, viewer) => {
     corridorPoints.map(point => Cesium.Cartographic.clone(point))
   ).catch((error) => {
     console.warn('Failed to sample detailed terrain for route preview.', error);
-    return corridorPoints.map(point => Cesium.Cartographic.clone(point));
+    return corridorPoints.map(() => ({ height: Number.NaN }));
   });
-  const sceneSamples = await viewer.scene.sampleHeightMostDetailed(
-    corridorPoints.map(point => Cesium.Cartographic.clone(point))
-  ).catch((error) => {
+  let sceneSamples;
+  const globe = viewer.scene.globe;
+  const globeWasShown = globe.show;
+  try {
+    // sampleHeightMostDetailed 默认同时命中 globe 与 3D Tiles。采样障碍物时临时
+    // 隐藏 globe，确保这里得到的是建筑/场景物体，而不是侧向山坡高度。
+    globe.show = false;
+    viewer.scene.requestRender();
+    await waitForNextFrame();
+    sceneSamples = await viewer.scene.sampleHeightMostDetailed(
+      corridorPoints.map(point => Cesium.Cartographic.clone(point)),
+      objectsToExclude
+    );
+  } catch (error) {
     console.warn('Failed to sample buildings for route preview.', error);
-    return corridorPoints.map(point => Cesium.Cartographic.clone(point));
-  });
+    sceneSamples = corridorPoints.map(() => ({ height: Number.NaN }));
+  } finally {
+    globe.show = globeWasShown;
+    viewer.scene.requestRender();
+  }
   const pointsPerGroup = localOffsets.length;
 
   return corridorGroups.map((group, groupIndex) => {
-    const heights = group.map((fallbackPoint, pointIndex) => {
+    const groupHeights = group.map((fallbackPoint, pointIndex) => {
       const sampleIndex = groupIndex * pointsPerGroup + pointIndex;
       const terrainHeight = Number(terrainSamples[sampleIndex]?.height);
       const sceneHeight = Number(sceneSamples[sampleIndex]?.height);
       const cachedTerrainHeight = Number(viewer.scene.globe.getHeight(fallbackPoint));
-      return [terrainHeight, sceneHeight, cachedTerrainHeight, 0]
-        .filter(Number.isFinite)
-        .reduce((maximum, height) => Math.max(maximum, height), 0);
+      const resolvedTerrainHeight = Number.isFinite(terrainHeight)
+        ? terrainHeight
+        : (Number.isFinite(cachedTerrainHeight) ? cachedTerrainHeight : 0);
+      return {
+        terrainHeight: resolvedTerrainHeight,
+        sceneHeight: Number.isFinite(sceneHeight) ? sceneHeight : null
+      };
     });
-    return Math.max(0, ...heights);
+    // 基础航高只使用中心线地形；障碍高度只使用高出同点地形的场景物体。
+    return resolveCorridorHeightSample(groupHeights);
   });
 };
 
-const buildAvoidanceSamples = (resamplePlan, surfaceHeights, Cesium) => {
+const buildAvoidanceSamples = (resamplePlan, heightSamples, Cesium) => {
   let cumulativeDistance = 0;
   return resamplePlan.map((plan, index) => {
     if (index > 0) {
@@ -2114,15 +2136,17 @@ const buildAvoidanceSamples = (resamplePlan, surfaceHeights, Cesium) => {
       cumulativeDistance += Number(geodesic.surfaceDistance) || 0;
     }
     const plannedAltitude = Number(plan.plannedAbsoluteAltitude);
-    const surfaceHeight = Number(surfaceHeights[index]) || 0;
+    const terrainHeight = Number(heightSamples[index]?.terrainHeight) || 0;
+    const surfaceHeight = Number(heightSamples[index]?.surfaceHeight) || terrainHeight;
     const surfaceOffset = Number(plan.plannedSurfaceOffset);
     const followsSurface = props.executeHeightMode === 'realTimeFollowSurface';
     return {
       cartographic: plan.cartographic,
       distance: cumulativeDistance,
       baselineAltitude: followsSurface
-        ? surfaceHeight + (Number.isFinite(surfaceOffset) ? surfaceOffset : ROUTE_CLEARANCE_METERS)
+        ? terrainHeight + (Number.isFinite(surfaceOffset) ? surfaceOffset : ROUTE_CLEARANCE_METERS)
         : (Number.isFinite(plannedAltitude) ? plannedAltitude : surfaceHeight + ROUTE_CLEARANCE_METERS),
+      terrainHeight,
       surfaceHeight,
       cameraState: plan.cameraState
     };
@@ -2164,14 +2188,19 @@ const prepareRoutePreview = async () => {
     viewer.scene.requestRender();
     await waitForNextFrame();
 
-    let sampledSurfaceHeights;
+    let sampledHeights;
     try {
-      sampledSurfaceHeights = await sampleRouteCorridorHeights(cartographics, Cesium, viewer);
+      sampledHeights = await sampleRouteCorridorHeights(
+        cartographics,
+        Cesium,
+        viewer,
+        visibleEntities
+      );
     } finally {
       visibleEntities.forEach((entity) => { entity.show = true; });
     }
 
-    const avoidanceSamples = buildAvoidanceSamples(resamplePlan, sampledSurfaceHeights, Cesium);
+    const avoidanceSamples = buildAvoidanceSamples(resamplePlan, sampledHeights, Cesium);
     const avoidanceEnabled = resolvedObstacleAvoidance.value.enabled !== false;
     const avoidanceProfile = avoidanceEnabled
       ? buildVerticalAvoidanceProfile(avoidanceSamples, resolvedObstacleAvoidance.value)
@@ -2193,6 +2222,7 @@ const prepareRoutePreview = async () => {
     )));
     previewCameraStates = avoidanceProfile.points.map(point => point.cameraState);
     previewSurfaceHeights = avoidanceProfile.points.map(point => point.surfaceHeight);
+    previewTerrainHeights = avoidanceProfile.points.map(point => point.terrainHeight);
     previewAltitudeAdjustedCount.value = avoidanceProfile.obstacleSampleCount;
     previewAvoidanceSegmentCount.value = avoidanceProfile.avoidanceSegmentCount;
     previewMaxAltitudeAdjustment.value = avoidanceProfile.maxAltitudeAdjustment;
@@ -2547,7 +2577,13 @@ const updateRoutePreviewPosition = (distance) => {
     fraction,
     0
   );
-  previewCurrentSurfaceHeight.value = surfaceHeight;
+  const terrainHeight = interpolateNumber(
+    previewTerrainHeights[segmentIndex],
+    previewTerrainHeights[segmentIndex + 1],
+    fraction,
+    surfaceHeight
+  );
+  previewCurrentSurfaceHeight.value = terrainHeight;
   previewProgress.value = total > 0 ? (previewDistance / total) * 100 : 0;
   followPreviewCamera(position, previewPath[segmentIndex + 1], cameraState);
   updateRoutePreviewFov(
