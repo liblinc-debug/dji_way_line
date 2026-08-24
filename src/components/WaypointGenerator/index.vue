@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full overflow-hidden font-sans relative">
+  <div class="w-full h-full overflow-hidden font-sans relative" :class="{ 'ai-map-picking': aiMapSelectionMode }">
     <!-- 统一地图背景层：真正实现单例持久化，消除闪烁 -->
     <div class="absolute inset-0 z-[1] bg-gray-100" :class="mapLayoutClass">
       <MapViewer ref="mapRef" :waypoints="activeMapData.waypoints" :route-type="activeMapData.routeType"
@@ -53,6 +53,41 @@
     <CreateMissionModal :visible="showCreateModal" :initial-values="embeddedContext" @cancel="showCreateModal = false"
       @confirm="onMissionCreated" />
 
+    <AIMissionPanel ref="aiPanelRef" :mission="editingMission || previewMission" :map-context="aiMapContext"
+      :drone-context="aiDroneContext" @apply="handleApplyAIPlan"
+      @request-map-selection="startAIMapSelection" />
+
+    <div v-if="aiMapSelectionMode" class="ai-map-pick-banner pointer-events-auto">
+      <div>
+        <strong>AI 地图选点模式</strong>
+        <span>请在地图上单击目标位置，按 Esc 可取消</span>
+      </div>
+      <button type="button" @click="cancelAIMapSelection">取消选点</button>
+    </div>
+
+    <a-modal v-model:open="aiPointDialogVisible" title="地图选点信息" ok-text="使用此位置"
+      cancel-text="暂不使用" :confirm-loading="reverseGeocodeLoading" :z-index="13050"
+      @ok="confirmAIMapPoint">
+      <div class="ai-point-dialog">
+        <div class="ai-point-name-row">
+          <span class="ai-point-marker">⌖</span>
+          <div>
+            <small>地点名称</small>
+            <strong>{{ reverseGeocodeLoading ? '正在识别地点…' : selectedMapPoint?.name || '地点名称暂不可用' }}</strong>
+            <p v-if="selectedMapPoint?.displayName && selectedMapPoint.displayName !== selectedMapPoint.name">
+              {{ selectedMapPoint.displayName }}
+            </p>
+          </div>
+        </div>
+        <dl>
+          <div><dt>经度</dt><dd>{{ formatCoordinate(selectedMapPoint?.lng) }}</dd></div>
+          <div><dt>纬度</dt><dd>{{ formatCoordinate(selectedMapPoint?.lat) }}</dd></div>
+          <div><dt>地面高程</dt><dd>{{ Number(selectedMapPoint?.alt || 0).toFixed(0) }} m</dd></div>
+        </dl>
+        <p v-if="reverseGeocodeError" class="ai-point-error">{{ reverseGeocodeError }}；坐标仍可正常用于任务规划。</p>
+      </div>
+    </a-modal>
+
     <!-- 2D/3D 切换按钮 (避开右侧编辑器面板，使用 calc 动态计算位置) -->
     <div class="fixed bottom-32 z-[10000] pointer-events-auto transition-all duration-300"
       :style="{ right: currentView === 'editor' && editingMission ? '370px' : '20px' }">
@@ -70,7 +105,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { generateKMZ } from '../../utils/kmzGenerator';
 import { buildLocalWaylineResult, downloadWaylineBlob, downloadWaylineJson, importWaylineFile } from '../../utils/localWaylineFile';
@@ -82,6 +117,9 @@ import { mergeDerivedRequirements, normalizeRouteLinking } from '../../utils/rou
 import { gcj02ToWgs84 } from '../../utils/coordTransform.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { getTaskApiBase } from '../../utils/taskApi.js';
+import { convertAIPlanToMission } from '../../missionPlanner/adapter.js';
+import { reverseGeocodePoint } from '../../services/aiMissionService.js';
+import AIMissionPanel from '../aiMission/AIMissionPanel.vue';
 import CreateMissionModal from './CreateMissionModal.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
@@ -100,6 +138,13 @@ const editingMission = ref(null);
 const previewMission = ref(null);
 const mapRef = ref(null);
 const editorRef = ref(null);
+const aiPanelRef = ref(null);
+const selectedMapPoint = ref(null);
+const aiMapSelectionMode = ref(false);
+const aiPointDialogVisible = ref(false);
+const reverseGeocodeLoading = ref(false);
+const reverseGeocodeError = ref('');
+const aircraftInventory = ref([]);
 const getMapPose = () => mapRef.value?.getCurrentPose?.() || null;
 const embeddedContext = ref({});
 const BRIDGE_MESSAGE_SOURCE = 'wrj-wayline-bridge';
@@ -623,7 +668,63 @@ watch(() => editingMission.value?._fovData, (fov) => {
 }, { deep: true });
 
 // 处理地图点击与事件转发
-const onMapClick = (e) => {
+const formatCoordinate = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(7) : '--';
+
+const startAIMapSelection = () => {
+  aiMapSelectionMode.value = true;
+  aiPointDialogVisible.value = false;
+  message.info('已进入 AI 地图选点模式，请在地图上单击目标位置');
+};
+
+const cancelAIMapSelection = () => {
+  aiMapSelectionMode.value = false;
+  message.info('已取消 AI 地图选点');
+};
+
+const resolveSelectedPlace = async (point) => {
+  reverseGeocodeLoading.value = true;
+  reverseGeocodeError.value = '';
+  try {
+    const result = await reverseGeocodePoint(point.lat, point.lng);
+    selectedMapPoint.value = {
+      ...point,
+      name: result.name || result.displayName || '',
+      displayName: result.displayName || result.name || ''
+    };
+  } catch (error) {
+    reverseGeocodeError.value = `地点名称识别失败：${error.message}`;
+    selectedMapPoint.value = { ...point, name: '', displayName: '' };
+  } finally {
+    reverseGeocodeLoading.value = false;
+  }
+};
+
+const openAIMapPointDialog = async (e) => {
+  const point = { lat: Number(e.lat), lng: Number(e.lng), alt: Number(e.terrainHeight || 0) };
+  selectedMapPoint.value = point;
+  aiMapSelectionMode.value = false;
+  aiPointDialogVisible.value = true;
+  await resolveSelectedPlace(point);
+};
+
+const confirmAIMapPoint = async () => {
+  if (!selectedMapPoint.value || reverseGeocodeLoading.value) return;
+  aiPointDialogVisible.value = false;
+  await nextTick();
+  await aiPanelRef.value?.useSelectedMapPoint?.(selectedMapPoint.value);
+};
+
+const handleSelectionKeydown = (event) => {
+  if (event.key === 'Escape' && aiMapSelectionMode.value) cancelAIMapSelection();
+};
+
+const onMapClick = async (e) => {
+  if (aiMapSelectionMode.value) {
+    await openAIMapPointDialog(e);
+    return;
+  }
+
+  selectedMapPoint.value = { lat: e.lat, lng: e.lng, alt: e.terrainHeight || 0 };
   if (currentView.value === 'editor' && editorRef.value) {
     const m = editingMission.value;
     // 自动捕获起飞点逻辑：在任何模式下，如果没有设置起飞点且航点数少于 1，则首个点击点自动作为起飞基准点
@@ -637,7 +738,69 @@ const onMapClick = (e) => {
     if (editorRef.value.onMapClick) {
       editorRef.value.onMapClick(e);
     }
+    return;
   }
+
+  // In library/preview mode a map click has no editing meaning, so expose the
+  // selected coordinate instead of silently swallowing it.
+  await openAIMapPointDialog(e);
+};
+
+const aiMapContext = computed(() => {
+  const mission = editingMission.value || previewMission.value;
+  const points = (mission?.waypoints || [])
+    .filter(point => Number.isFinite(Number(point?.lat)) && Number.isFinite(Number(point?.lng)))
+    .map(point => ({ lat: Number(point.lat), lng: Number(point.lng), alt: Number(point.height || 0) }));
+  return {
+    ...(selectedMapPoint.value ? { selectedPoint: selectedMapPoint.value } : {}),
+    ...(points.length >= 3 ? { polygon: points } : {}),
+    ...(points.length >= 2 ? { lineString: points } : {}),
+    noFlyZones: mission?.config?.noFlyZones || [],
+    pois: mission?.config?.pois || []
+  };
+});
+
+const aiDroneContext = computed(() => {
+  const mission = editingMission.value || previewMission.value;
+  const configuredAircraftIds = mission?.config?.aircraftIds || [];
+  const aircraft = aircraftInventory.value.find(item => configuredAircraftIds.includes(item.aircraftId))
+    || aircraftInventory.value.find(item => item.status === 'online')
+    || aircraftInventory.value[0];
+  return aircraft ? {
+    id: aircraft.aircraftId,
+    status: String(aircraft.status || '').toUpperCase(),
+    ...(aircraft.location ? { location: aircraft.location } : {}),
+    ...(Number.isFinite(Number(aircraft.battery)) ? { battery: Number(aircraft.battery) } : {}),
+    ...(aircraft.gpsFix ? { gpsFix: aircraft.gpsFix } : {}),
+    ...(aircraft.rtk ? { rtk: aircraft.rtk } : {}),
+    ...(Number.isFinite(Number(aircraft.satellites)) ? { satellites: Number(aircraft.satellites) } : {}),
+    ...(Number.isFinite(Number(aircraft.signalQuality)) ? { signalQuality: Number(aircraft.signalQuality) } : {}),
+    ...(Number.isFinite(Number(aircraft.latencyMs)) ? { latencyMs: Number(aircraft.latencyMs) } : {})
+  } : {};
+});
+
+const loadAircraftInventory = async () => {
+  try {
+    const result = await request('/aircrafts');
+    aircraftInventory.value = Array.isArray(result?.items) ? result.items : [];
+  } catch (error) {
+    aircraftInventory.value = [];
+  }
+};
+
+const handleApplyAIPlan = async (plan) => {
+  const sourceMission = editingMission.value || previewMission.value || {
+    id: Date.now(),
+    name: plan.missionName,
+    config: { ...defaultMissionConfig, missionName: plan.missionName },
+    waypoints: []
+  };
+  const converted = normalizeMission(convertAIPlanToMission(plan, JSON.parse(JSON.stringify(sourceMission))));
+  previewMission.value = null;
+  editingMission.value = converted;
+  currentView.value = 'editor';
+  await nextTick();
+  editorRef.value?.applyMission?.(converted);
 };
 
 const onInsertWaypoint = (data) => {
@@ -875,12 +1038,15 @@ onMounted(() => {
 
   restoreUiStateFromStorage();
   window.addEventListener('message', handleIframeMessage);
+  window.addEventListener('keydown', handleSelectionKeydown);
   postParentMessage('wayline:ready', { version: '1.0.0' });
   loadMissionsFromBackend();
+  loadAircraftInventory();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleIframeMessage);
+  window.removeEventListener('keydown', handleSelectionKeydown);
 });
 
 const saveMissionsToStorage = () => {
@@ -1123,5 +1289,131 @@ const downloadMission = async (payload) => {
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #444;
   border-radius: 2px;
+}
+
+.ai-map-picking canvas {
+  cursor: crosshair !important;
+}
+
+.ai-map-pick-banner {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  z-index: 13000;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(147, 197, 253, 0.7);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 16px 46px rgba(15, 23, 42, 0.34);
+  padding: 10px 12px 10px 15px;
+  color: #fff;
+  backdrop-filter: blur(14px);
+}
+
+.ai-map-pick-banner div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-map-pick-banner strong {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.ai-map-pick-banner span {
+  color: #cbd5e1;
+  font-size: 10px;
+}
+
+.ai-map-pick-banner button {
+  border: 1px solid #475569;
+  border-radius: 7px;
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 6px 9px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.ai-point-dialog {
+  color: #334155;
+}
+
+.ai-point-name-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+  padding: 12px;
+}
+
+.ai-point-marker {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 18px;
+}
+
+.ai-point-name-row div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-point-name-row small,
+.ai-point-dialog dt {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.ai-point-name-row strong {
+  margin-top: 2px;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.ai-point-name-row p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.ai-point-dialog dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.ai-point-dialog dl div {
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 9px;
+}
+
+.ai-point-dialog dd {
+  margin: 3px 0 0;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ai-point-error {
+  margin: 9px 0 0;
+  color: #b45309;
+  font-size: 10px;
 }
 </style>

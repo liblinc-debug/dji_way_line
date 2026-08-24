@@ -1183,7 +1183,22 @@ const downloadJSON = () => {
 };
 
 defineExpose({
-    onMapClick, handleInsertWaypoint, handleWaypointMove, applyPose: (index, pose) => {
+    onMapClick, handleInsertWaypoint, handleWaypointMove,
+    applyMission: (mission) => {
+        if (!mission) return;
+        missionConfig.value = {
+            ...missionConfig.value,
+            ...(mission.config || {}),
+            obstacleAvoidance: {
+                ...OBSTACLE_AVOIDANCE_DEFAULT,
+                ...(mission.config?.obstacleAvoidance || {})
+            }
+        };
+        waypoints.value = JSON.parse(JSON.stringify(mission.waypoints || []));
+        selectedWpIndex.value = -1;
+        selectedActionIndex.value = -1;
+    },
+    applyPose: (index, pose) => {
         if (pose) handleRecordPoseInternal(index, pose);
     }
 });

@@ -34,7 +34,7 @@
                 :disableDepthTestDistance="Number.POSITIVE_INFINITY"></vc-graphics-billboard>
 
               <!-- Label: Yellow background when selected for maximum contrast -->
-              <vc-graphics-label :text="(index + 1).toString()" :font="'bold 14px sans-serif'" :pixelOffset="[0, -25]"
+              <vc-graphics-label :text="waypointMapLabel(wp, index)" :font="'bold 11px sans-serif'" :pixelOffset="[0, -34]"
                 :fillColor="'white'" :outlineColor="'black'" :outlineWidth="2" :showBackground="true"
                 :backgroundColor="selectedWpIndex === index ? '#00f2ff' : 'rgba(0, 242, 255, 0.8)'"
                 :backgroundPadding="[4, 4]" :disableDepthTestDistance="Number.POSITIVE_INFINITY"></vc-graphics-label>
@@ -980,6 +980,22 @@ const selectedWpYawRad = computed(() => {
   const yawAction = wp.actions?.find(a => a.type === ACTION_TYPE.AIRCRAFT_YAW);
   return -((yawAction?.params?.aircraftYawAngle || 0) * Math.PI) / 180;
 });
+
+const waypointMapLabel = (waypoint, index) => {
+  const actionLabels = {
+    [ACTION_TYPE.TAKE_PHOTO]: '拍照',
+    [ACTION_TYPE.START_RECORD]: '录像',
+    [ACTION_TYPE.STOP_RECORD]: '停录',
+    [ACTION_TYPE.GIMBAL_PITCH]: '云台',
+    [ACTION_TYPE.AIRCRAFT_YAW]: '航向',
+    [ACTION_TYPE.HOVER]: '悬停',
+    [ACTION_TYPE.START_TIMED_PHOTO]: '定拍'
+  };
+  const actions = [...new Set((waypoint?.actions || []).map(action => actionLabels[action?.type]).filter(Boolean))];
+  const height = Number(waypoint?.height ?? 0).toFixed(0);
+  const speed = Number(waypoint?.speed ?? 0).toFixed(1);
+  return `WP${index + 1}\n${height}m · ${speed}m/s${actions.length ? `\n${actions.join(' · ')}` : ''}`;
+};
 
 const waypointPositions = computed(() => {
   if (!cesiumInstance.value || enhancedWaypoints.value.length === 0) return [];
