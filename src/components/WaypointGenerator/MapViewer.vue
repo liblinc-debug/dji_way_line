@@ -412,7 +412,7 @@
         </template>
 
         <!-- Route playback camera FOV: 24 mm wide reference (yellow) -->
-        <template v-if="previewReady && previewShowWideFov && routePreviewWideFovData.frustum && routePreviewDronePosition">
+        <template v-if="previewReady && previewShowFov && routePreviewWideFovData.frustum && routePreviewDronePosition">
           <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewWideFovData.rawPoints" :key="'route-wide-side-' + i">
             <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
               <vc-graphics-polygon
@@ -446,7 +446,7 @@
         </template>
 
         <!-- Route playback current zoom FOV (green) -->
-        <template v-if="previewReady && previewShowZoomFov && routePreviewZoomFovData.frustum && routePreviewDronePosition">
+        <template v-if="previewReady && previewShowFov && routePreviewZoomFovData.frustum && routePreviewDronePosition">
           <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewZoomFovData.rawPoints" :key="'route-zoom-side-' + i">
             <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
               <vc-graphics-polygon
@@ -669,21 +669,23 @@
           {{ previewAltitudeModeLabel }}：模拟飞行高度与规划高度一致。
         </div>
         <div class="mt-2 rounded border border-white/10 bg-black/20 px-2 py-2 text-[10px] text-gray-200">
-          <div class="mb-1.5 text-gray-400">视场显示（默认关闭）</div>
+          <label class="mb-1.5 flex w-fit cursor-pointer items-center gap-1.5 text-gray-200">
+            <input v-model="previewShowFov" type="checkbox" class="h-3.5 w-3.5 accent-blue-500" />
+            <span>视场显示</span>
+            <span class="text-gray-500">（默认关闭）</span>
+          </label>
           <div class="flex items-center justify-between gap-3">
-            <label class="flex cursor-pointer items-center gap-1.5">
-              <input v-model="previewShowWideFov" type="checkbox" class="h-3.5 w-3.5 accent-yellow-400" />
+            <div class="flex items-center gap-1.5">
               <i class="h-2.5 w-2.5 rounded-sm border border-yellow-200 bg-yellow-400/40"></i>
               <span>黄色：广角基准 24 mm</span>
-            </label>
+            </div>
             <span class="font-mono text-yellow-100">固定最大取景范围</span>
           </div>
           <div class="mt-1 flex items-center justify-between gap-3">
-            <label class="flex cursor-pointer items-center gap-1.5">
-              <input v-model="previewShowZoomFov" type="checkbox" class="h-3.5 w-3.5 accent-green-400" />
+            <div class="flex items-center gap-1.5">
               <i class="h-2.5 w-2.5 rounded-sm border border-green-200 bg-green-400/40"></i>
               <span>绿色：当前变焦视场</span>
-            </label>
+            </div>
             <span class="font-mono text-green-100">{{ previewZoomFactor.toFixed(1) }}× / {{ previewFocalLength.toFixed(1) }} mm</span>
           </div>
           <div class="mt-1 text-gray-400">两者共享飞机航向与云台俯仰（当前 {{ previewGimbalPitch.toFixed(1) }}°）；1× 变焦时两区域重合。</div>
@@ -790,7 +792,8 @@ const emit = defineEmits([
   'insert-waypoint',
   'waypoint-move',
   'update:takeoffHeight',
-  'preview-camera-update'
+  'preview-camera-update',
+  'preview-fov-visibility-update'
 ]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
 
@@ -885,8 +888,7 @@ const virtualDroneVisible = ref(false);
 const routePreviewDronePosition = ref(null);
 const previewGimbalPitch = ref(-45);
 const previewZoomFactor = ref(1);
-const previewShowWideFov = ref(false);
-const previewShowZoomFov = ref(false);
+const previewShowFov = ref(false);
 const fovPreviewMode = ref('idle');
 const pendingFovState = ref(null);
 const pendingVirtualFlightState = ref(null);
@@ -2035,6 +2037,7 @@ const invalidateRoutePreview = () => {
   clearManualFlightKeys();
   unlockPreviewCamera();
   removePreviewEntities();
+  previewShowFov.value = false;
   previewPath = [];
   previewCameraStates = [];
   previewSurfaceHeights = [];
@@ -3459,6 +3462,12 @@ const clearVirtualFlight = () => {
 };
 
 // --- 5. Watchers ---
+watch(previewShowFov, (enabled) => {
+  emit('preview-fov-visibility-update', Boolean(enabled));
+  if (!enabled) clearFov();
+  viewerInstance.value?.scene?.requestRender?.();
+});
+
 watch(() => props.waypoints, (newWps, oldWps) => {
   if (!viewerInstance.value || !cesiumInstance.value || draggedWaypointIndex.value !== -1 || !newWps?.length) return;
   const p = newWps[0];

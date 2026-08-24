@@ -20,6 +20,7 @@ const props = defineProps({
 const cesiumInstance = ref(null);
 const viewerInstance = ref(null);
 const groundDistance = ref(0);
+let removePostRenderListener = null;
 const emit = defineEmits(['update:distance']);
 
 const onViewerReady = ({ Cesium, viewer }) => {
@@ -47,7 +48,7 @@ const onViewerReady = ({ Cesium, viewer }) => {
     viewer.shadows = false;
 
     // 每帧渲染后更新测距
-    viewer.scene.postRender.addEventListener(updateCenterDistance);
+    removePostRenderListener = viewer.scene.postRender.addEventListener(updateCenterDistance);
 
     setTimeout(() => {
         if (viewer && !viewer.isDestroyed()) {
@@ -115,10 +116,12 @@ watch(() => [props.dronePos, props.gimbalPitch, props.aircraftYaw, props.zoomFac
 }, { deep: true, flush: 'sync' });
 
 onBeforeUnmount(() => {
-    if (viewerInstance.value && !viewerInstance.value.isDestroyed()) {
-        viewerInstance.value.scene.postRender.removeEventListener(updateCenterDistance);
-        viewerInstance.value.destroy();
-    }
+    removePostRenderListener?.();
+    removePostRenderListener = null;
+    // vc-viewer owns the Cesium Viewer lifecycle. Destroying it here causes
+    // VueCesium to access an already-destroyed scene during its own unmount.
+    viewerInstance.value = null;
+    cesiumInstance.value = null;
 });
 </script>
 

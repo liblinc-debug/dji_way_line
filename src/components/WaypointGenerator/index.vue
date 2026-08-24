@@ -18,6 +18,7 @@
         @update:takeoffHeight="handleTakeoffHeightUpdate" @map-click="onMapClick" @insert-waypoint="onInsertWaypoint"
         @waypoint-move="onWaypointMove"
         @preview-camera-update="handleRoutePreviewCameraUpdate"
+        @preview-fov-visibility-update="handleRoutePreviewFovVisibilityUpdate"
         class="h-full w-full" />
     </div>
 
@@ -58,7 +59,7 @@
       :drone-context="aiDroneContext" @apply="handleApplyAIPlan"
       @request-map-selection="startAIMapSelection" />
 
-    <MissionCameraPreview v-if="currentView === 'library' && previewMission?.waypoints?.length"
+    <MissionCameraPreview v-if="currentView === 'library' && routePreviewFovVisible && previewMission?.waypoints?.length"
       :mission="previewMission" :live-state="routePreviewCameraState" @fov-update="handleFovUpdateFromEditor"
       @focus-waypoint="handleLibraryPreviewWaypoint" />
 
@@ -130,6 +131,7 @@ const showCreateModal = ref(false);
 const editingMission = ref(null);
 const previewMission = ref(null);
 const routePreviewCameraState = ref(null);
+const routePreviewFovVisible = ref(false);
 const mapRef = ref(null);
 const editorRef = ref(null);
 const aiPanelRef = ref(null);
@@ -853,12 +855,17 @@ const handlePreviewMission = (id) => {
   const mission = missions.value.find(m => m.id === id);
   if (mission) {
     routePreviewCameraState.value = null;
+    routePreviewFovVisible.value = false;
     previewMission.value = mission;
   }
 };
 
 const handleRoutePreviewCameraUpdate = (state) => {
   routePreviewCameraState.value = state?.active ? state : null;
+};
+
+const handleRoutePreviewFovVisibilityUpdate = (visible) => {
+  routePreviewFovVisible.value = Boolean(visible);
 };
 const defaultMissionConfig = {
   missionName: '未命名航线',
@@ -1070,6 +1077,7 @@ const handleBackToLibrary = () => {
   editingMission.value = null;
   previewMission.value = null;
   routePreviewCameraState.value = null;
+  routePreviewFovVisible.value = false;
 };
 
 const onMissionCreated = (config) => {
@@ -1122,6 +1130,7 @@ const selectMission = (id) => {
   const mission = missions.value.find(m => m.id === id);
   if (mission) {
     routePreviewCameraState.value = null;
+    routePreviewFovVisible.value = false;
     editingMission.value = normalizeMission(JSON.parse(JSON.stringify(mission))); // 深拷贝防止直接污染列表
     currentView.value = 'editor';
   }
