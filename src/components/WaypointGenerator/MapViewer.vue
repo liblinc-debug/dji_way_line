@@ -504,6 +504,26 @@
 
     <div v-if="mapLoading" class="absolute inset-0 z-20 cursor-wait pointer-events-auto" @click.stop @pointerdown.stop></div>
 
+    <nav class="map-navigation pointer-events-auto" :style="navigationControlStyle" aria-label="地图导航">
+      <button type="button" :title="sceneMode === 2 ? '切换到 3D 视角' : '切换到 2D 视角'"
+        :aria-label="sceneMode === 2 ? '切换到 3D 视角' : '切换到 2D 视角'" :disabled="mapLoading"
+        @click.stop="toggleSceneMode">
+        <span class="scene-label">{{ sceneMode === 2 ? '3D' : '2D' }}</span>
+      </button>
+      <button type="button" title="放大地图" aria-label="放大地图" :disabled="mapLoading" @click.stop="zoomCamera('in')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+      <button type="button" title="缩小地图" aria-label="缩小地图" :disabled="mapLoading" @click.stop="zoomCamera('out')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+      </button>
+      <button type="button" title="定位当前位置" aria-label="定位当前位置" :disabled="mapLoading"
+        @click.stop="locateToCurrentPosition(true)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+        </svg>
+      </button>
+    </nav>
+
     <!-- UI Overlay Info -->
     <div @mousemove.stop
       class="absolute bottom-0 left-0 right-0 h-7 bg-[#0a0a0ae6] backdrop-blur-md flex items-center justify-between px-6 text-[10px] text-gray-400 font-mono z-20 select-none border-t border-white/5">
@@ -763,7 +783,15 @@ const props = defineProps({
   previewMode: { type: String, default: 'idle' }
 });
 
-const emit = defineEmits(['map-click', 'fly-to', 'context-menu', 'insert-waypoint', 'waypoint-move', 'update:takeoffHeight']);
+const emit = defineEmits([
+  'map-click',
+  'fly-to',
+  'context-menu',
+  'insert-waypoint',
+  'waypoint-move',
+  'update:takeoffHeight',
+  'preview-camera-update'
+]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
 
 // --- 2. Reactive State (Refs) ---
@@ -896,6 +924,9 @@ const rightControlOffset = computed(() => (
 const mapControlStyle = computed(() => ({
   right: `${rightControlOffset.value}px`,
   left: 'auto'
+}));
+const navigationControlStyle = computed(() => ({
+  right: `${rightControlOffset.value}px`
 }));
 const canPreviewRoute = computed(() => (
   props.routeType === 'waypoint'
@@ -2019,6 +2050,7 @@ const invalidateRoutePreview = () => {
   previewError.value = '';
   previewPathVersion.value = 0;
   previewTelemetryVisible.value = false;
+  emit('preview-camera-update', null);
 };
 
 const interpolateNumber = (start, end, fraction, fallback = 0) => {
@@ -2457,6 +2489,20 @@ const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = fal
     absAltitude: absoluteAltitude
   };
   previewLastFovUpdateAt = updateTime;
+  emit('preview-camera-update', {
+    active: true,
+    dronePos: {
+      ...dronePos,
+      terrainHeight: resolvedSurfaceHeight,
+      isRelative: false
+    },
+    gimbalAtt,
+    focalLength: zoomFocalLength,
+    zoomFactor: cameraState.zoomFactor,
+    progress: previewProgress.value,
+    playing: previewPlaying.value,
+    viewMode: previewViewMode.value
+  });
 };
 
 const updatePreviewScreenRotation = (viewer, Cesium) => {
@@ -3007,20 +3053,23 @@ const onViewerReadyInternal = ({ Cesium, viewer }) => {
   locateToCurrentPosition();
 };
 
-const locateToCurrentPosition = () => {
-  if (hasAutoLocated.value || props.waypoints?.length > 0) return;
-  if (!viewerInstance.value || !cesiumInstance.value || !navigator.geolocation) return;
+const locateToCurrentPosition = (force = false) => {
+  if (!force && (hasAutoLocated.value || props.waypoints?.length > 0)) return;
+  if (!viewerInstance.value || !cesiumInstance.value || !navigator.geolocation) {
+    if (force) message.warning('当前浏览器不支持位置定位');
+    return;
+  }
   // 浏览器定位 API 仅在安全上下文（HTTPS 或 localhost）下可用，否则会静默失败
   if (!window.isSecureContext) {
-    hasAutoLocated.value = true;
+    if (!force) hasAutoLocated.value = true;
     message.warning('当前通过 HTTP 访问，浏览器已禁用定位功能，请使用 HTTPS 或 localhost 访问以启用定位');
     return;
   }
 
-  hasAutoLocated.value = true;
+  if (!force) hasAutoLocated.value = true;
   navigator.geolocation.getCurrentPosition(
     (position) => {
-      if (props.waypoints?.length > 0 || !viewerInstance.value || !cesiumInstance.value) return;
+      if ((!force && props.waypoints?.length > 0) || !viewerInstance.value || !cesiumInstance.value) return;
 
       const Cesium = cesiumInstance.value;
       const viewer = viewerInstance.value;
@@ -3054,6 +3103,15 @@ const locateToCurrentPosition = () => {
       maximumAge: 60000
     }
   );
+};
+
+const zoomCamera = (direction) => {
+  if (!viewerInstance.value || mapLoading.value) return;
+  const viewer = viewerInstance.value;
+  const currentHeight = Math.max(10, Number(viewer.camera.positionCartographic?.height || 1000));
+  const amount = Math.max(20, currentHeight * 0.35);
+  if (direction === 'out') viewer.camera.zoomOut(amount);
+  else viewer.camera.zoomIn(amount);
 };
 
 const onMapClick = (e) => {
@@ -3551,6 +3609,65 @@ defineExpose({ updateFov, updateVirtualFlight, flyTo, getCurrentPose, resetTo2D,
 </script>
 
 <style scoped>
+.map-navigation {
+  position: absolute;
+  top: 50%;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(-50%);
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 10px;
+  background: rgb(15 23 42 / 82%);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 32%);
+  backdrop-filter: blur(12px);
+  transition: right 0.25s ease;
+}
+
+.map-navigation button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-bottom: 1px solid rgb(255 255 255 / 12%);
+  background: transparent;
+  color: #f8fafc;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.map-navigation button:last-child {
+  border-bottom: 0;
+}
+
+.map-navigation button:hover:not(:disabled) {
+  background: rgb(37 99 235 / 75%);
+  color: #fff;
+}
+
+.map-navigation button:disabled {
+  cursor: wait;
+  opacity: 0.4;
+}
+
+.map-navigation svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.map-navigation .scene-label {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
 kbd {
   display: inline-flex;
   min-width: 20px;

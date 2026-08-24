@@ -187,7 +187,7 @@
         </div>
 
         <!-- 2. FPV 云台预览 Teleport (根据状态决定显示) -->
-        <Teleport :to="cameraTarget" v-if="activePreviewMode !== 'idle' && cameraTarget">
+        <Teleport :to="cameraTarget" v-if="teleportReady && activePreviewMode !== 'idle' && cameraTarget">
         <div class="w-full h-full relative group bg-black overflow-hidden pointer-events-auto">
             <CameraPreview v-if="activePreviewDronePos" :dronePos="activePreviewDronePos"
                 :takeoffHeight="missionConfig.takeOffPointHeight || 0" :gimbalPitch="activePreviewGimbalPitch"
@@ -336,7 +336,7 @@
 
 <script setup>
 import * as turf from '@turf/turf';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ACTION_TYPE, DEFAULT_ACTION_PARAMS } from '../../../types/waypointRoute.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../../types/missionConfig.js';
 import { generateKMZ } from '../../../utils/kmzGenerator';
@@ -385,9 +385,12 @@ const missionConfig = ref({
 const waypoints = ref([...(props.initialMission.waypoints || [])]);
 const mapViewerRef = ref(null);
 const leftTabActiveKey = ref('list');
-const selectedWpIndex = ref(-1);
+// Existing missions must enter the editor with a concrete preview target.
+// Newly created missions remain unselected until their first waypoint is added.
+const selectedWpIndex = ref(waypoints.value.length > 0 ? 0 : -1);
 const selectedActionIndex = ref(-1);
 const isMounted = ref(false);
+const teleportReady = ref(false);
 const editorRootRef = ref(null);
 
 const virtualFlightEnabled = ref(false);
@@ -437,10 +440,18 @@ const virtualFlightKeyHint = computed(() => {
 });
 const previewPanelTitle = computed(() => (activePreviewMode.value === 'virtual' ? '虚拟飞行预览' : '云台/姿态预览'));
 
-onMounted(() => {
+onMounted(async () => {
     isMounted.value = true;
     focusEditorRoot();
     attachVirtualFlightListeners();
+    // Teleport targets are rendered by this component. Existing missions can
+    // already have an active waypoint on the first render, so wait until both
+    // host elements exist before mounting the camera preview.
+    await nextTick();
+    teleportReady.value = true;
+    if (selectedWpIndex.value >= 0) {
+        handleSelectWaypoint(selectedWpIndex.value);
+    }
 });
 
 const onEditorPointerDown = (event) => {
@@ -1247,6 +1258,7 @@ watch([activePreviewMode, activePreviewDronePos, activePreviewGimbalPitch, activ
 }, { immediate: true });
 
 onBeforeUnmount(() => {
+    teleportReady.value = false;
     detachVirtualFlightListeners();
     clearVirtualKeyState();
     if (updateTimer) {

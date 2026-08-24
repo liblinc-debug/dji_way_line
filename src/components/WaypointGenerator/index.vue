@@ -17,6 +17,7 @@
         :right-overlay-offset="currentView === 'editor' && editingMission ? 360 : 0"
         @update:takeoffHeight="handleTakeoffHeightUpdate" @map-click="onMapClick" @insert-waypoint="onInsertWaypoint"
         @waypoint-move="onWaypointMove"
+        @preview-camera-update="handleRoutePreviewCameraUpdate"
         class="h-full w-full" />
     </div>
 
@@ -57,6 +58,10 @@
       :drone-context="aiDroneContext" @apply="handleApplyAIPlan"
       @request-map-selection="startAIMapSelection" />
 
+    <MissionCameraPreview v-if="currentView === 'library' && previewMission?.waypoints?.length"
+      :mission="previewMission" :live-state="routePreviewCameraState" @fov-update="handleFovUpdateFromEditor"
+      @focus-waypoint="handleLibraryPreviewWaypoint" />
+
     <div v-if="aiMapSelectionMode" class="ai-map-pick-banner pointer-events-auto">
       <div>
         <strong>AI 地图选点模式</strong>
@@ -88,19 +93,6 @@
       </div>
     </a-modal>
 
-    <!-- 2D/3D 切换按钮 (避开右侧编辑器面板，使用 calc 动态计算位置) -->
-    <div class="fixed bottom-32 z-[10000] pointer-events-auto transition-all duration-300"
-      :style="{ right: currentView === 'editor' && editingMission ? '370px' : '20px' }">
-      <button v-if="mapRef" :disabled="mapRef.mapLoading" @click="mapRef.toggleSceneMode()"
-        :title="mapRef.mapLoading ? '地图切换中，请稍候' : '切换 2D/3D 场景'"
-        class="w-10 h-10 rounded-full border border-white/30 bg-black/60 backdrop-blur-xl flex flex-col items-center justify-center cursor-pointer hover:bg-black/80 hover:border-blue-400/50 transition-all group active:scale-90 disabled:cursor-wait disabled:opacity-50 shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
-        <span
-          class="text-[9px] font-bold text-gray-400 group-hover:text-blue-300 transition-colors leading-none uppercase">Scene</span>
-        <span class="text-[12px] font-black text-white group-hover:text-blue-400 transition-colors">
-          {{ mapRef.sceneMode === 2 ? '2D' : '3D' }}
-        </span>
-      </button>
-    </div>
   </div>
 </template>
 
@@ -121,6 +113,7 @@ import { convertAIPlanToMission } from '../../missionPlanner/adapter.js';
 import { reverseGeocodePoint } from '../../services/aiMissionService.js';
 import AIMissionPanel from '../aiMission/AIMissionPanel.vue';
 import CreateMissionModal from './CreateMissionModal.vue';
+import MissionCameraPreview from './MissionCameraPreview.vue';
 import WaypointEditor from './editors/WaypointEditor.vue';
 import MapViewer from './MapViewer.vue';
 import MissionLibrary from './MissionLibrary.vue';
@@ -136,6 +129,7 @@ const currentView = ref('library');
 const showCreateModal = ref(false);
 const editingMission = ref(null);
 const previewMission = ref(null);
+const routePreviewCameraState = ref(null);
 const mapRef = ref(null);
 const editorRef = ref(null);
 const aiPanelRef = ref(null);
@@ -656,6 +650,11 @@ const handleFocusWaypoint = ({ waypoint } = {}) => {
   mapRef.value.flyTo(waypoint);
 };
 
+const handleLibraryPreviewWaypoint = (waypoint) => {
+  if (!waypoint || !mapRef.value?.flyTo) return;
+  mapRef.value.flyTo(waypoint);
+};
+
 // 监听 FOV 数据变更并转发给 MapViewer 组件
 watch(() => editingMission.value?._fovData, (fov) => {
   if (mapRef.value) {
@@ -853,8 +852,13 @@ watch(() => activeMapData.value.waypoints, (newWps) => {
 const handlePreviewMission = (id) => {
   const mission = missions.value.find(m => m.id === id);
   if (mission) {
+    routePreviewCameraState.value = null;
     previewMission.value = mission;
   }
+};
+
+const handleRoutePreviewCameraUpdate = (state) => {
+  routePreviewCameraState.value = state?.active ? state : null;
 };
 const defaultMissionConfig = {
   missionName: '未命名航线',
@@ -1065,6 +1069,7 @@ const handleBackToLibrary = () => {
   currentView.value = 'library';
   editingMission.value = null;
   previewMission.value = null;
+  routePreviewCameraState.value = null;
 };
 
 const onMissionCreated = (config) => {
@@ -1116,6 +1121,7 @@ const createEmbeddedMissionFromContext = () => {
 const selectMission = (id) => {
   const mission = missions.value.find(m => m.id === id);
   if (mission) {
+    routePreviewCameraState.value = null;
     editingMission.value = normalizeMission(JSON.parse(JSON.stringify(mission))); // 深拷贝防止直接污染列表
     currentView.value = 'editor';
   }
