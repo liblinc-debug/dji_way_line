@@ -98,6 +98,7 @@ import { convertMissionToAIContext } from '../../missionPlanner/adapter.js'
 const props = defineProps({
   mission: { type: Object, default: null },
   mapContext: { type: Object, default: () => ({}) },
+  getMapCenter: { type: Function, default: null },
   droneContext: { type: Object, default: () => ({}) }
 })
 
@@ -114,9 +115,10 @@ const validation = ref(null)
 const responseStatus = ref('NEED_CONFIRM')
 const revision = ref(0)
 const missingFields = ref([])
+const mapSelectionPurpose = ref('destination')
 const conversationId = ref(sessionStorage.getItem('ai-mission-conversation-id') || '')
 const messages = ref([
-  { role: 'assistant', content: '告诉我去哪里、飞多高、速度、执行动作和结束方式。关键坐标不明确时，我会请你地图选点。' }
+  { role: 'assistant', content: '告诉我想去哪里和执行什么动作即可。未说明时默认高度 100m、速度 5m/s、当前位置取地图中心点；关键目标坐标不明确时，我会请你地图选点。' }
 ])
 
 const quickActions = [
@@ -162,6 +164,16 @@ function buildDroneContext() {
   }
 }
 
+function buildMapContext() {
+  const center = props.getMapCenter?.()
+  return {
+    ...(props.mapContext || {}),
+    ...(center && Number.isFinite(Number(center.lat)) && Number.isFinite(Number(center.lng))
+      ? { center: { lat: Number(center.lat), lng: Number(center.lng), alt: Number(center.alt || 0) } }
+      : {})
+  }
+}
+
 async function sendPreset(prompt) {
   input.value = prompt
   await send()
@@ -180,7 +192,7 @@ async function send() {
       message: content,
       missionContext: convertMissionToAIContext(props.mission || {}),
       droneContext: buildDroneContext(),
-      mapContext: props.mapContext || {}
+      mapContext: buildMapContext()
     })
     conversationId.value = response.conversationId
     sessionStorage.setItem('ai-mission-conversation-id', response.conversationId)
@@ -194,7 +206,9 @@ async function send() {
     revision.value = Number(response.revision || 0)
     missingFields.value = response.missingFields || []
     if (missingFields.value.includes('destination')) {
-      requestMapSelection()
+      requestMapSelection('destination')
+    } else if (missingFields.value.includes('currentDroneLocation')) {
+      requestMapSelection('currentDroneLocation')
     }
   } catch (error) {
     messages.value.push({ role: 'assistant', content: `AI 服务暂时不可用：${error.message}。现有任务编辑与执行功能不受影响。` })
@@ -204,7 +218,8 @@ async function send() {
   }
 }
 
-function requestMapSelection() {
+function requestMapSelection(purpose = 'destination') {
+  if (typeof purpose === 'string') mapSelectionPurpose.value = purpose
   open.value = true
   emit('request-map-selection')
 }
@@ -215,9 +230,12 @@ async function useSelectedMapPoint(point) {
   const name = point.name || '地图选点'
   messages.value.push({
     role: 'assistant',
-    content: `已选择：${name}\n经度 ${Number(point.lng).toFixed(7)}，纬度 ${Number(point.lat).toFixed(7)}。正在将此位置用于当前规划。`
+    content: `已选择：${name}\n经度 ${Number(point.lng).toFixed(7)}，纬度 ${Number(point.lat).toFixed(7)}。正在将此位置用作${mapSelectionPurpose.value === 'currentDroneLocation' ? '当前无人机位置' : '目标位置'}。`
   })
-  input.value = '使用刚才的地图选点作为目标位置'
+  input.value = mapSelectionPurpose.value === 'currentDroneLocation'
+    ? '使用刚才的地图选点作为当前无人机位置'
+    : '使用刚才的地图选点作为目标位置'
+  mapSelectionPurpose.value = 'destination'
   await nextTick()
   await send()
 }
@@ -252,7 +270,7 @@ function restartPlanning() {
   responseStatus.value = 'NEED_CONFIRM'
   revision.value = 0
   missingFields.value = []
-  messages.value = [{ role: 'assistant', content: '已开始新的规划。请重新描述目标位置、飞行高度、速度、动作和结束方式。' }]
+  messages.value = [{ role: 'assistant', content: '已开始新的规划。请描述目标位置、动作和结束方式；未说明时默认高度 100m、速度 5m/s、当前位置取地图中心点。' }]
   nextTick(focusInput)
 }
 

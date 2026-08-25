@@ -56,6 +56,7 @@
       @confirm="onMissionCreated" />
 
     <AIMissionPanel ref="aiPanelRef" :mission="editingMission || previewMission" :map-context="aiMapContext"
+      :get-map-center="getMapCenter"
       :drone-context="aiDroneContext" @apply="handleApplyAIPlan"
       @request-map-selection="startAIMapSelection" />
 
@@ -142,6 +143,7 @@ const reverseGeocodeLoading = ref(false);
 const reverseGeocodeError = ref('');
 const aircraftInventory = ref([]);
 const getMapPose = () => mapRef.value?.getCurrentPose?.() || null;
+const getMapCenter = () => getMapPose()?.center || null;
 const embeddedContext = ref({});
 const BRIDGE_MESSAGE_SOURCE = 'wrj-wayline-bridge';
 
@@ -1073,6 +1075,7 @@ const handleBackToLibrary = () => {
     postBridgeMessage('back');
     return;
   }
+  mapRef.value?.resetMissionContext?.();
   currentView.value = 'library';
   editingMission.value = null;
   previewMission.value = null;
@@ -1129,6 +1132,7 @@ const createEmbeddedMissionFromContext = () => {
 const selectMission = (id) => {
   const mission = missions.value.find(m => m.id === id);
   if (mission) {
+    mapRef.value?.resetMissionContext?.();
     routePreviewCameraState.value = null;
     routePreviewFovVisible.value = false;
     editingMission.value = normalizeMission(JSON.parse(JSON.stringify(mission))); // 深拷贝防止直接污染列表
