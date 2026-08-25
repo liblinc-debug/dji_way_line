@@ -8,7 +8,8 @@
     "dev": "vite --host",
     "api": "node backend/server.mjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "serve": "vite preview --host 0.0.0.0 --port 5173"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",

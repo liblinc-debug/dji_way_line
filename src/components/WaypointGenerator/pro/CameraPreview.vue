@@ -3,7 +3,6 @@
         <vc-viewer @ready="onViewerReady" :remove-cesium-script="false" :animation="false" :timeline="false" :base-layer-picker="false"
             :fullscreen-button="false" :scene-mode-picker="false" :info-box="false" :selection-indicator="false"
             :navigation-help-button="false" :scene3d-only="true" :context-options="viewerContextOptions"
-            :request-render-mode="true" :maximum-render-time-change="Number.POSITIVE_INFINITY" :target-frame-rate="30"
             class="absolute inset-0">
         </vc-viewer>
     </div>

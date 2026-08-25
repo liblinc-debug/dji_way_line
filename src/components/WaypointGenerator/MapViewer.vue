@@ -3,8 +3,7 @@
     <vc-viewer @ready="onViewerReadyInternal" :scene-mode="sceneMode" @left-click="onMapClick"
       :access-token="cesiumAccessToken" :remove-cesium-script="false" :animation="false" :timeline="false" :base-layer-picker="false"
       :fullscreen-button="false" :scene-mode-picker="false" :info-box="false" :selection-indicator="false"
-      :context-options="viewerContextOptions" :request-render-mode="true"
-      :maximum-render-time-change="Number.POSITIVE_INFINITY" :target-frame-rate="PREVIEW_TARGET_FPS"
+      :context-options="viewerContextOptions"
       class="absolute inset-0">
       <template v-if="cesiumInstance">
         <!-- Enhanced 3D Waypoints with Measurement HUD (只用于航点模式) -->
@@ -730,12 +729,7 @@ const emit = defineEmits([
   'preview-fov-visibility-update'
 ]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
-const PREVIEW_TARGET_FPS = 30;
-const PREVIEW_FRAME_INTERVAL_MS = 1000 / PREVIEW_TARGET_FPS;
-// FOV geometry is intentionally refreshed at 2 FPS. Aircraft/camera motion stays
-// at 30 FPS while the comparatively expensive terrain-projected footprint does
-// not monopolize the main thread.
-const PREVIEW_FOV_UPDATE_INTERVAL_MS = 500;
+const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000 / 30;
 const viewerContextOptions = markRaw({
   webgl: {
     alpha: false,
@@ -789,6 +783,7 @@ const manualFlightSafetyState = ref('');
 
 let mapSwitchSequence = 0;
 let buildingTileset = null;
+let buildingProviderLabel = 'OSM 3D 白模';
 let baseImageryLayer = null;
 let standardTerrainProvider = null;
 let ellipsoidTerrainProvider = null;
@@ -1823,29 +1818,54 @@ const ensureBuildingTileset = async (Cesium, viewer) => {
   buildingTileset = null;
   let tileset = null;
   let lastError = null;
-  for (let attempt = 0; attempt < 3 && !tileset; attempt += 1) {
+  buildingProviderLabel = 'OSM 3D 白模';
+
+  // Keep the production-proven Cesium OSM 3D Tiles path as the primary source.
+  // I3S SceneServer data requires substantially more CPU-side decoding and is
+  // retained only as a resilience fallback when Cesium ion is unavailable.
+  for (let attempt = 0; attempt < 2 && !tileset; attempt += 1) {
     try {
-      tileset = await Cesium.I3SDataProvider.fromUrl(ARCGIS_3D_BUILDINGS_URL, {
-        cesium3dTilesetOptions: {
-          maximumScreenSpaceError: 16,
-          dynamicScreenSpaceError: true
-        }
+      tileset = await Cesium.createOsmBuildingsAsync({
+        enableShowOutline: false
       });
     } catch (error) {
       lastError = error;
-      if (attempt < 2 && !viewer.isDestroyed?.()) {
+      if (attempt < 1 && !viewer.isDestroyed?.()) {
         await waitForDelay(500 * (attempt + 1));
       }
     }
   }
+
+  if (!tileset && !viewer.isDestroyed?.()) {
+    buildingProviderLabel = 'Esri 3D 白模（备用）';
+    for (let attempt = 0; attempt < 2 && !tileset; attempt += 1) {
+      try {
+        tileset = await Cesium.I3SDataProvider.fromUrl(ARCGIS_3D_BUILDINGS_URL, {
+          cesium3dTilesetOptions: {
+            maximumScreenSpaceError: 24,
+            dynamicScreenSpaceError: true,
+            skipLevelOfDetail: true
+          }
+        });
+      } catch (error) {
+        lastError = error;
+        if (attempt < 1 && !viewer.isDestroyed?.()) await waitForDelay(500);
+      }
+    }
+  }
+
   if (!tileset) throw lastError || new Error('3D 白模资源加载失败。');
   if (viewer.isDestroyed?.()) {
     tileset.destroy?.();
     return null;
   }
   const whiteBuildingStyle = new Cesium.Cesium3DTileStyle({ color: "color('white', 0.92)" });
-  for (const layer of tileset.layers || []) {
-    if (layer?.tileset) layer.tileset.style = whiteBuildingStyle;
+  if (buildingProviderLabel === 'OSM 3D 白模') {
+    tileset.style = whiteBuildingStyle;
+  } else {
+    for (const layer of tileset.layers || []) {
+      if (layer?.tileset) layer.tileset.style = whiteBuildingStyle;
+    }
   }
   buildingTileset = markRaw(viewer.scene.primitives.add(tileset));
   return buildingTileset;
@@ -1853,9 +1873,14 @@ const ensureBuildingTileset = async (Cesium, viewer) => {
 
 const ensureStandardTerrain = async (Cesium) => {
   if (standardTerrainProvider) return standardTerrainProvider;
-  standardTerrainProvider = markRaw(await Cesium.ArcGISTiledElevationTerrainProvider.fromUrl(
-    ARCGIS_WORLD_ELEVATION_URL
-  ));
+  try {
+    standardTerrainProvider = markRaw(await Cesium.createWorldTerrainAsync());
+  } catch (error) {
+    console.warn('Cesium World Terrain unavailable; using ArcGIS elevation fallback.', error);
+    standardTerrainProvider = markRaw(await Cesium.ArcGISTiledElevationTerrainProvider.fromUrl(
+      ARCGIS_WORLD_ELEVATION_URL
+    ));
+  }
   return standardTerrainProvider;
 };
 
@@ -1890,7 +1915,7 @@ const performMapModeTransition = async ({ mode, preservePreview }) => {
         return;
       }
       if (!tileset) throw new Error('3D 白模资源已失效。');
-      mapStatus.value = 'ArcGIS 影像 · Cesium 地形 · Esri 3D 白模';
+      mapStatus.value = `ArcGIS 影像 · Cesium 地形 · ${buildingProviderLabel}`;
     } else {
       hideBuildingTileset();
       await ensureStandardTerrain(Cesium);
@@ -2471,22 +2496,44 @@ const getPreviewCameraState = (segmentIndex, fraction) => {
 
 const buildRoutePreviewFootprint = (dronePos, gimbalAtt, focalLength, groundHeight, Cesium) => {
   const specs = calculateFovFromFocalLength(focalLength);
-  const projectionPoints = calculateFOVProjection(dronePos, gimbalAtt, specs, groundHeight);
-  const rawProjectionPoints = projectionPoints.length > 1
-    ? projectionPoints.slice(0, -1)
-    : projectionPoints;
-  const toCartesian = (point) => {
-    const cartographic = Cesium.Cartographic.fromDegrees(point.lng, point.lat);
-    const sampledHeight = viewerInstance.value?.scene?.globe?.getHeight(cartographic);
+  const relativeHeight = Math.max(0.1, Number(dronePos.alt) - Number(groundHeight));
+  const yaw = Cesium.Math.toRadians(gimbalAtt.yaw);
+  const pitch = Cesium.Math.toRadians(gimbalAtt.pitch);
+  const halfHorizontal = Math.tan(Cesium.Math.toRadians(specs.hfov) / 2);
+  const halfVertical = Math.tan(Cesium.Math.toRadians(specs.vfov) / 2);
+  const sinYaw = Math.sin(yaw);
+  const cosYaw = Math.cos(yaw);
+  const sinPitch = Math.sin(pitch);
+  const cosPitch = Math.cos(pitch);
+  const latitudeRadians = Cesium.Math.toRadians(dronePos.lat);
+  const metersPerDegreeLatitude = Math.PI * Cesium.Ellipsoid.WGS84.maximumRadius / 180;
+  const metersPerDegreeLongitude = Math.max(0.001, metersPerDegreeLatitude * Math.cos(latitudeRadians));
+  const corners = [
+    [-halfHorizontal, halfVertical],
+    [halfHorizontal, halfVertical],
+    [halfHorizontal, -halfVertical],
+    [-halfHorizontal, -halfVertical]
+  ];
+  const rawProjectionPoints = corners.map(([x, z]) => {
+    const pitchedY = cosPitch - z * sinPitch;
+    const pitchedZ = sinPitch + z * cosPitch;
+    const east = x * cosYaw + pitchedY * sinYaw;
+    const north = -x * sinYaw + pitchedY * cosYaw;
+    const rayDistance = pitchedZ >= -0.1
+      ? 2000
+      : Math.min(3000, -relativeHeight / pitchedZ);
     return Cesium.Cartesian3.fromDegrees(
-      point.lng,
-      point.lat,
-      (Number.isFinite(sampledHeight) ? sampledHeight : groundHeight) + 0.5
+      Number(dronePos.lng) + (east * rayDistance) / metersPerDegreeLongitude,
+      Number(dronePos.lat) + (north * rayDistance) / metersPerDegreeLatitude,
+      Number(groundHeight) + 0.5
     );
-  };
+  });
+  const projectionPoints = rawProjectionPoints.length
+    ? [...rawProjectionPoints, rawProjectionPoints[0]]
+    : [];
   return {
-    points: projectionPoints.map(toCartesian),
-    rawPoints: rawProjectionPoints.map(toCartesian)
+    points: projectionPoints,
+    rawPoints: rawProjectionPoints
   };
 };
 
@@ -2970,21 +3017,9 @@ const focusManualFlightInput = (event) => {
 
 const runRoutePreviewFrame = (timestamp) => {
   if (!previewPlaying.value) return;
-  if (!previewLastTimestamp) {
-    previewLastTimestamp = timestamp;
-    previewRafId = requestAnimationFrame(runRoutePreviewFrame);
-    return;
-  }
-  const elapsed = timestamp - previewLastTimestamp;
-  if (elapsed < PREVIEW_FRAME_INTERVAL_MS) {
-    previewRafId = requestAnimationFrame(runRoutePreviewFrame);
-    return;
-  }
-  // Playback follows wall-clock time even when a terrain/building frame is slow.
-  // The previous 100 ms cap made the aircraft run in slow motion whenever Cesium
-  // missed frames, amplifying the impression of a frozen preview.
-  const deltaSeconds = Math.min(1, Math.max(0, elapsed / 1000));
-  previewLastTimestamp = timestamp - (elapsed % PREVIEW_FRAME_INTERVAL_MS);
+  const previousTimestamp = previewLastTimestamp || timestamp;
+  const deltaSeconds = Math.min(1, Math.max(0, (timestamp - previousTimestamp) / 1000));
+  previewLastTimestamp = timestamp;
   updateRoutePreviewPosition(previewDistance + deltaSeconds * Math.max(0.1, Number(previewSpeed.value) || 10));
 
   if (previewDistance >= previewTotalDistance.value) {
