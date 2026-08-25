@@ -412,6 +412,74 @@
           </vc-entity>
         </template>
 
+        <!-- Route playback camera FOV: 24 mm wide reference (yellow) -->
+        <template v-if="previewReady && previewShowFov && routePreviewWideFovData.frustum && routePreviewDronePosition">
+          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewWideFovData.rawPoints" :key="'route-wide-side-' + i">
+            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
+              <vc-graphics-polygon
+                :hierarchy="[routePreviewDronePosition, p, routePreviewWideFovData.rawPoints[(i + 1) % routePreviewWideFovData.rawPoints.length]]"
+                :material="'rgba(255, 255, 0, 0.08)'"
+                :perPositionHeight="true"
+              />
+              <vc-graphics-polyline
+                :positions="[routePreviewDronePosition, p]"
+                :material="'rgba(255, 255, 0, 0.45)'"
+                :width="3.0"
+              />
+            </vc-entity>
+          </template>
+          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
+            <vc-graphics-polyline
+              :positions="routePreviewWideFovData.points"
+              :clampToGround="sceneMode === 2"
+              :material="'rgba(255, 255, 0, 0.8)'"
+              :width="4.0"
+            />
+          </vc-entity>
+          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
+            <vc-graphics-polygon
+              :hierarchy="routePreviewWideFovData.points"
+              :material="routePreviewWideFovData.appearance.material.uniforms.color"
+              :perPositionHeight="sceneMode === 3"
+              :heightReference="sceneMode === 2 ? 1 : 0"
+            />
+          </vc-entity>
+        </template>
+
+        <!-- Route playback current zoom FOV (green) -->
+        <template v-if="previewReady && previewShowFov && routePreviewZoomFovData.frustum && routePreviewDronePosition">
+          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewZoomFovData.rawPoints" :key="'route-zoom-side-' + i">
+            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
+              <vc-graphics-polygon
+                :hierarchy="[routePreviewDronePosition, p, routePreviewZoomFovData.rawPoints[(i + 1) % routePreviewZoomFovData.rawPoints.length]]"
+                :material="'rgba(0, 255, 0, 0.15)'"
+                :perPositionHeight="true"
+              />
+              <vc-graphics-polyline
+                :positions="[routePreviewDronePosition, p]"
+                :material="'rgba(0, 255, 0, 0.85)'"
+                :width="1.5"
+              />
+            </vc-entity>
+          </template>
+          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
+            <vc-graphics-polyline
+              :positions="routePreviewZoomFovData.points"
+              :clampToGround="sceneMode === 2"
+              :material="'rgba(0, 255, 0, 0.8)'"
+              :width="2.0"
+            />
+          </vc-entity>
+          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
+            <vc-graphics-polygon
+              :hierarchy="routePreviewZoomFovData.points"
+              :material="routePreviewZoomFovData.appearance.material.uniforms.color"
+              :perPositionHeight="sceneMode === 3"
+              :heightReference="sceneMode === 2 ? 1 : 0"
+            />
+          </vc-entity>
+        </template>
+
         <!-- Waypoint Route Polyline (Hidden in Patrol Mode to avoid color conflict) -->
         <template v-if="!props.isPatrolMode && waypointRouteSegments.length > 0">
           <vc-entity v-for="segment in waypointRouteSegments" :key="'waypoint-route-' + segment.key">
@@ -729,7 +797,7 @@ const emit = defineEmits([
   'preview-fov-visibility-update'
 ]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
-const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000 / 30;
+const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000;
 const viewerContextOptions = markRaw({
   webgl: {
     alpha: false,
@@ -792,15 +860,6 @@ let queuedMapRequest = null;
 let previewRouteEntity = null;
 let previewDroneEntity = null;
 let previewHeadingEntity = null;
-let routePreviewFovEntities = [];
-let routePreviewFovCollection = null;
-let routePreviewFovGeometry = {
-  dronePosition: null,
-  widePoints: [],
-  wideRawPoints: [],
-  zoomPoints: [],
-  zoomRawPoints: []
-};
 let previewPath = [];
 let previewCameraStates = [];
 let previewSurfaceHeights = [];
@@ -836,6 +895,8 @@ const virtualDroneYawRad = ref(0);
 const virtualDroneColor = ref('#00aaff');
 const virtualDroneVisible = ref(false);
 const routePreviewDronePosition = ref(null);
+const routePreviewWideFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
+const routePreviewZoomFovData = ref({ points: [], rawPoints: [], altitude: 0, absAltitude: 0, params: null, frustum: null, orientation: null, modelMatrix: null, appearance: null, lineAppearance: null, lineAttributes: null });
 const previewGimbalPitch = ref(-45);
 const previewZoomFactor = ref(1);
 const previewShowFov = ref(false);
@@ -2001,54 +2062,6 @@ const unlockPreviewCamera = () => {
   }
 };
 
-const setRoutePreviewFovVisible = (visible) => {
-  routePreviewFovEntities.forEach((entity) => {
-    entity.show = Boolean(visible);
-  });
-  viewerInstance.value?.scene?.requestRender?.();
-};
-
-const removeRoutePreviewFovEntities = () => {
-  const viewer = viewerInstance.value;
-  if (viewer && !viewer.isDestroyed?.() && routePreviewFovCollection) {
-    viewer.scene.primitives.remove(routePreviewFovCollection);
-  }
-  routePreviewFovEntities = [];
-  routePreviewFovCollection = null;
-  routePreviewFovGeometry = {
-    dronePosition: null,
-    widePoints: [],
-    wideRawPoints: [],
-    zoomPoints: [],
-    zoomRawPoints: []
-  };
-};
-
-const ensureRoutePreviewFovEntities = (viewer, Cesium) => {
-  if (routePreviewFovEntities.length > 0) return;
-  routePreviewFovCollection = markRaw(viewer.scene.primitives.add(new Cesium.PolylineCollection()));
-  const addFootprint = (color, width) => {
-    routePreviewFovEntities.push(markRaw(routePreviewFovCollection.add({
-      show: previewShowFov.value,
-      positions: [],
-      width,
-      material: Cesium.Material.fromType('Color', { color: color.withAlpha(0.9) })
-    })));
-  };
-  addFootprint(Cesium.Color.YELLOW, 4);
-  addFootprint(Cesium.Color.LIME, 2);
-};
-
-const updateRoutePreviewFootprintEntities = (offset, points, rawPoints) => {
-  const outlineEntity = routePreviewFovEntities[offset];
-  if (!outlineEntity) return;
-  const dronePosition = routePreviewFovGeometry.dronePosition;
-  const frustumLines = dronePosition
-    ? rawPoints.flatMap((corner) => [dronePosition, corner])
-    : [];
-  outlineEntity.positions = [...points, ...frustumLines];
-};
-
 const removePreviewEntities = () => {
   const viewer = viewerInstance.value;
   if (viewer && !viewer.isDestroyed?.()) {
@@ -2056,7 +2069,6 @@ const removePreviewEntities = () => {
     if (previewDroneEntity) viewer.entities.remove(previewDroneEntity);
     if (previewHeadingEntity) viewer.entities.remove(previewHeadingEntity);
   }
-  removeRoutePreviewFovEntities();
   previewRouteEntity = null;
   previewDroneEntity = null;
   previewHeadingEntity = null;
@@ -2070,6 +2082,8 @@ const removePreviewEntities = () => {
   previewThirdPersonRange = 100;
   preview2DFrustumWidth = 0;
   routePreviewDronePosition.value = null;
+  routePreviewWideFovData.value = { points: [], rawPoints: [] };
+  routePreviewZoomFovData.value = { points: [], rawPoints: [] };
   previewGimbalPitch.value = -45;
   previewZoomFactor.value = 1;
   previewCurrentSurfaceHeight.value = 0;
@@ -2494,49 +2508,6 @@ const getPreviewCameraState = (segmentIndex, fraction) => {
   };
 };
 
-const buildRoutePreviewFootprint = (dronePos, gimbalAtt, focalLength, groundHeight, Cesium) => {
-  const specs = calculateFovFromFocalLength(focalLength);
-  const relativeHeight = Math.max(0.1, Number(dronePos.alt) - Number(groundHeight));
-  const yaw = Cesium.Math.toRadians(gimbalAtt.yaw);
-  const pitch = Cesium.Math.toRadians(gimbalAtt.pitch);
-  const halfHorizontal = Math.tan(Cesium.Math.toRadians(specs.hfov) / 2);
-  const halfVertical = Math.tan(Cesium.Math.toRadians(specs.vfov) / 2);
-  const sinYaw = Math.sin(yaw);
-  const cosYaw = Math.cos(yaw);
-  const sinPitch = Math.sin(pitch);
-  const cosPitch = Math.cos(pitch);
-  const latitudeRadians = Cesium.Math.toRadians(dronePos.lat);
-  const metersPerDegreeLatitude = Math.PI * Cesium.Ellipsoid.WGS84.maximumRadius / 180;
-  const metersPerDegreeLongitude = Math.max(0.001, metersPerDegreeLatitude * Math.cos(latitudeRadians));
-  const corners = [
-    [-halfHorizontal, halfVertical],
-    [halfHorizontal, halfVertical],
-    [halfHorizontal, -halfVertical],
-    [-halfHorizontal, -halfVertical]
-  ];
-  const rawProjectionPoints = corners.map(([x, z]) => {
-    const pitchedY = cosPitch - z * sinPitch;
-    const pitchedZ = sinPitch + z * cosPitch;
-    const east = x * cosYaw + pitchedY * sinYaw;
-    const north = -x * sinYaw + pitchedY * cosYaw;
-    const rayDistance = pitchedZ >= -0.1
-      ? 2000
-      : Math.min(3000, -relativeHeight / pitchedZ);
-    return Cesium.Cartesian3.fromDegrees(
-      Number(dronePos.lng) + (east * rayDistance) / metersPerDegreeLongitude,
-      Number(dronePos.lat) + (north * rayDistance) / metersPerDegreeLatitude,
-      Number(groundHeight) + 0.5
-    );
-  });
-  const projectionPoints = rawProjectionPoints.length
-    ? [...rawProjectionPoints, rawProjectionPoints[0]]
-    : [];
-  return {
-    points: projectionPoints,
-    rawPoints: rawProjectionPoints
-  };
-};
-
 const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = false) => {
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
@@ -2570,37 +2541,16 @@ const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = fal
   const zoomFocalLength = 24 * cameraState.zoomFactor;
 
   if (previewShowFov.value) {
-    ensureRoutePreviewFovEntities(viewer, Cesium);
-    const wideFootprint = buildRoutePreviewFootprint(
-      dronePos,
-      gimbalAtt,
-      24,
-      resolvedSurfaceHeight,
-      Cesium
-    );
-    const zoomFootprint = buildRoutePreviewFootprint(
-      dronePos,
-      gimbalAtt,
-      zoomFocalLength,
-      resolvedSurfaceHeight,
-      Cesium
-    );
-    routePreviewFovGeometry.dronePosition = routePreviewDronePosition.value;
-    routePreviewFovGeometry.widePoints = wideFootprint.points;
-    routePreviewFovGeometry.wideRawPoints = wideFootprint.rawPoints;
-    routePreviewFovGeometry.zoomPoints = zoomFootprint.points;
-    routePreviewFovGeometry.zoomRawPoints = zoomFootprint.rawPoints;
-    updateRoutePreviewFootprintEntities(
-      0,
-      routePreviewFovGeometry.widePoints,
-      routePreviewFovGeometry.wideRawPoints
-    );
-    updateRoutePreviewFootprintEntities(
-      1,
-      routePreviewFovGeometry.zoomPoints,
-      routePreviewFovGeometry.zoomRawPoints
-    );
-    viewer.scene.requestRender();
+    routePreviewWideFovData.value = {
+      ...buildFrustumData(dronePos, gimbalAtt, 24, 'yellow', absoluteAltitude, resolvedSurfaceHeight, Cesium),
+      altitude: absoluteAltitude,
+      absAltitude: absoluteAltitude
+    };
+    routePreviewZoomFovData.value = {
+      ...buildFrustumData(dronePos, gimbalAtt, zoomFocalLength, 'lime', absoluteAltitude, resolvedSurfaceHeight, Cesium),
+      altitude: absoluteAltitude,
+      absAltitude: absoluteAltitude
+    };
   }
   previewLastFovUpdateAt = updateTime;
   emit('preview-camera-update', {
@@ -3615,11 +3565,12 @@ const resetMissionContext = () => {
 // --- 5. Watchers ---
 watch(previewShowFov, (enabled) => {
   emit('preview-fov-visibility-update', Boolean(enabled));
-  setRoutePreviewFovVisible(enabled);
   if (enabled && previewReady.value) {
     previewLastFovUpdateAt = 0;
     updateRoutePreviewPosition(previewDistance);
   } else if (!enabled) {
+    routePreviewWideFovData.value = { points: [], rawPoints: [] };
+    routePreviewZoomFovData.value = { points: [], rawPoints: [] };
     clearFov();
   }
   viewerInstance.value?.scene?.requestRender?.();
