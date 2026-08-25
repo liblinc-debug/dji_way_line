@@ -797,7 +797,7 @@ const emit = defineEmits([
   'preview-fov-visibility-update'
 ]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
-const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000;
+const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000/10; // 10 FPS
 const viewerContextOptions = markRaw({
   webgl: {
     alpha: false,
