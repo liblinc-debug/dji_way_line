@@ -412,73 +412,36 @@
           </vc-entity>
         </template>
 
-        <!-- Route playback camera FOV: 24 mm wide reference (yellow) -->
-        <template v-if="previewReady && previewShowFov && routePreviewWideFovData.frustum && routePreviewDronePosition">
-          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewWideFovData.rawPoints" :key="'route-wide-side-' + i">
-            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
-              <vc-graphics-polygon
-                :hierarchy="[routePreviewDronePosition, p, routePreviewWideFovData.rawPoints[(i + 1) % routePreviewWideFovData.rawPoints.length]]"
-                :material="'rgba(255, 255, 0, 0.08)'"
-                :perPositionHeight="true"
-              />
-              <vc-graphics-polyline
-                :positions="[routePreviewDronePosition, p]"
-                :material="'rgba(255, 255, 0, 0.45)'"
-                :width="3.0"
-              />
-            </vc-entity>
-          </template>
-          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
-            <vc-graphics-polyline
-              :positions="routePreviewWideFovData.points"
-              :clampToGround="sceneMode === 2"
-              :material="'rgba(255, 255, 0, 0.8)'"
-              :width="4.0"
-            />
-          </vc-entity>
-          <vc-entity v-if="routePreviewWideFovData.points.length > 0">
-            <vc-graphics-polygon
-              :hierarchy="routePreviewWideFovData.points"
-              :material="routePreviewWideFovData.appearance.material.uniforms.color"
-              :perPositionHeight="sceneMode === 3"
-              :heightReference="sceneMode === 2 ? 1 : 0"
-            />
-          </vc-entity>
-        </template>
+        <!-- Route playback FOV uses shadow-map viewsheds so terrain and buildings occlude the footprint. -->
+        <vc-viewshed
+          v-if="previewReady && previewShowFov && sceneMode === 3 && routePreviewDronePosition && routePreviewWideFovData.endPosition"
+          :start-position="routePreviewDronePosition"
+          :end-position="routePreviewWideFovData.endPosition"
+          :fov-h="routePreviewWideFovData.params.hfov"
+          :fov-v="routePreviewWideFovData.params.vfov"
+          :offset-height="0"
+          :visible-color="'rgba(255, 235, 0, 0.20)'"
+          :invisible-color="'rgba(0, 0, 0, 0)'"
+          :show-grid-line="false"
+          :line-color="'rgba(0, 0, 0, 0)'"
+          :face-color="'rgba(0, 0, 0, 0)'"
+          :fragment-shader="visibleOnlyViewshedFragmentShader"
+        />
 
-        <!-- Route playback current zoom FOV (green) -->
-        <template v-if="previewReady && previewShowFov && routePreviewZoomFovData.frustum && routePreviewDronePosition">
-          <template v-if="sceneMode === 3" v-for="(p, i) in routePreviewZoomFovData.rawPoints" :key="'route-zoom-side-' + i">
-            <vc-entity :disableDepthTestDistance="Number.POSITIVE_INFINITY">
-              <vc-graphics-polygon
-                :hierarchy="[routePreviewDronePosition, p, routePreviewZoomFovData.rawPoints[(i + 1) % routePreviewZoomFovData.rawPoints.length]]"
-                :material="'rgba(0, 255, 0, 0.15)'"
-                :perPositionHeight="true"
-              />
-              <vc-graphics-polyline
-                :positions="[routePreviewDronePosition, p]"
-                :material="'rgba(0, 255, 0, 0.85)'"
-                :width="1.5"
-              />
-            </vc-entity>
-          </template>
-          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
-            <vc-graphics-polyline
-              :positions="routePreviewZoomFovData.points"
-              :clampToGround="sceneMode === 2"
-              :material="'rgba(0, 255, 0, 0.8)'"
-              :width="2.0"
-            />
-          </vc-entity>
-          <vc-entity v-if="routePreviewZoomFovData.points.length > 0">
-            <vc-graphics-polygon
-              :hierarchy="routePreviewZoomFovData.points"
-              :material="routePreviewZoomFovData.appearance.material.uniforms.color"
-              :perPositionHeight="sceneMode === 3"
-              :heightReference="sceneMode === 2 ? 1 : 0"
-            />
-          </vc-entity>
-        </template>
+        <vc-viewshed
+          v-if="previewReady && previewShowFov && sceneMode === 3 && routePreviewDronePosition && routePreviewZoomFovData.endPosition"
+          :start-position="routePreviewDronePosition"
+          :end-position="routePreviewZoomFovData.endPosition"
+          :fov-h="routePreviewZoomFovData.params.hfov"
+          :fov-v="routePreviewZoomFovData.params.vfov"
+          :offset-height="0"
+          :visible-color="'rgba(40, 255, 40, 0.30)'"
+          :invisible-color="'rgba(0, 0, 0, 0)'"
+          :show-grid-line="false"
+          :line-color="'rgba(0, 0, 0, 0)'"
+          :face-color="'rgba(0, 0, 0, 0)'"
+          :fragment-shader="visibleOnlyViewshedFragmentShader"
+        />
 
         <!-- Waypoint Route Polyline (Hidden in Patrol Mode to avoid color conflict) -->
         <template v-if="!props.isPatrolMode && waypointRouteSegments.length > 0">
@@ -756,6 +719,7 @@
 <script setup>
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
+import { VcViewshed } from 'vue-cesium';
 import { ACTION_TYPE } from '../../types/waypointRoute.js';
 import { OBSTACLE_AVOIDANCE_DEFAULT } from '../../types/missionConfig.js';
 import { calculateCenterPoint, calculateFOVProjection, calculateFovFromFocalLength } from '../../utils/fovCalculator';
@@ -763,6 +727,7 @@ import { createDronePreviewIcons } from '../../utils/dronePreviewIcon.js';
 import { buildVerticalAvoidanceProfile } from '../../utils/verticalAvoidance.js';
 import { resolveCorridorHeightSample } from '../../utils/terrainObstacle.js';
 import { PLANE_SVG } from './constants';
+import defaultViewshedFragmentShader from 'vue-cesium/es/shared/shaders/Viewshed.mjs';
 
 // --- 1. Props & Emits ---
 const props = defineProps({
@@ -798,6 +763,23 @@ const emit = defineEmits([
 ]);
 const cesiumAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIyZWRkYjY5MC1kOTAwLTQwMmYtYmUyYi0yM2JlNjU5YjVkYTAiLCJpZCI6MTY1MzMxLCJpYXQiOjE2OTQxNzY5Nzh9.MGD5_U2P3_spf9VQlJTFm3elXcVRI0zzC-v9VKTA7c4';
 const PREVIEW_FOV_UPDATE_INTERVAL_MS = 1000/10; // 10 FPS
+const PREVIEW_VIEWSHED_DISTANCE_METERS = 1200;
+const visibleOnlyViewshedFragmentShader = defaultViewshedFragmentShader
+  .replace(
+    'out_FragColor = mix(color,vec4(u_color1.rgb, 1.0),mixNum);',
+    'out_FragColor = mix(color, vec4(u_color1.rgb, 1.0), clamp(u_color1.a, 0.0, 1.0));'
+  )
+  .replace(
+    `    else{
+      if(abs(shadowPosition.z-0.0)<0.01){
+        return;
+      }
+      out_FragColor = mix(color,vec4(u_color2.rgb, 1.0),mixNum);
+    }`,
+    `    else {
+      return;
+    }`
+  );
 const viewerContextOptions = markRaw({
   webgl: {
     alpha: false,
@@ -1923,9 +1905,13 @@ const ensureBuildingTileset = async (Cesium, viewer) => {
   const whiteBuildingStyle = new Cesium.Cesium3DTileStyle({ color: "color('white', 0.92)" });
   if (buildingProviderLabel === 'OSM 3D 白模') {
     tileset.style = whiteBuildingStyle;
+    tileset.shadows = Cesium.ShadowMode.ENABLED;
   } else {
     for (const layer of tileset.layers || []) {
-      if (layer?.tileset) layer.tileset.style = whiteBuildingStyle;
+      if (layer?.tileset) {
+        layer.tileset.style = whiteBuildingStyle;
+        layer.tileset.shadows = Cesium.ShadowMode.ENABLED;
+      }
     }
   }
   buildingTileset = markRaw(viewer.scene.primitives.add(tileset));
@@ -2508,6 +2494,40 @@ const getPreviewCameraState = (segmentIndex, fraction) => {
   };
 };
 
+const buildRouteViewshedData = (position, gimbalAtt, focalLength, Cesium) => {
+  const specs = calculateFovFromFocalLength(focalLength);
+  const heading = Cesium.Math.toRadians(normalizeHeadingDegrees(gimbalAtt.yaw));
+  const pitch = Cesium.Math.toRadians(Number(gimbalAtt.pitch) || 0);
+  const cosPitch = Math.cos(pitch);
+  const localDirection = new Cesium.Cartesian3(
+    Math.sin(heading) * cosPitch,
+    Math.cos(heading) * cosPitch,
+    Math.sin(pitch)
+  );
+  const eastNorthUp = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+  const worldDirection = Cesium.Matrix4.multiplyByPointAsVector(
+    eastNorthUp,
+    localDirection,
+    new Cesium.Cartesian3()
+  );
+  Cesium.Cartesian3.normalize(worldDirection, worldDirection);
+  const offset = Cesium.Cartesian3.multiplyByScalar(
+    worldDirection,
+    PREVIEW_VIEWSHED_DISTANCE_METERS,
+    new Cesium.Cartesian3()
+  );
+  const endPosition = Cesium.Cartesian3.add(position, offset, new Cesium.Cartesian3());
+
+  return {
+    endPosition: markRaw(endPosition),
+    params: {
+      hfov: specs.hfov,
+      vfov: specs.vfov,
+      distance: PREVIEW_VIEWSHED_DISTANCE_METERS
+    }
+  };
+};
+
 const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = false) => {
   const viewer = viewerInstance.value;
   const Cesium = cesiumInstance.value;
@@ -2541,16 +2561,8 @@ const updateRoutePreviewFov = (position, cameraState, surfaceHeight, force = fal
   const zoomFocalLength = 24 * cameraState.zoomFactor;
 
   if (previewShowFov.value) {
-    routePreviewWideFovData.value = {
-      ...buildFrustumData(dronePos, gimbalAtt, 24, 'yellow', absoluteAltitude, resolvedSurfaceHeight, Cesium),
-      altitude: absoluteAltitude,
-      absAltitude: absoluteAltitude
-    };
-    routePreviewZoomFovData.value = {
-      ...buildFrustumData(dronePos, gimbalAtt, zoomFocalLength, 'lime', absoluteAltitude, resolvedSurfaceHeight, Cesium),
-      altitude: absoluteAltitude,
-      absAltitude: absoluteAltitude
-    };
+    routePreviewWideFovData.value = buildRouteViewshedData(position, gimbalAtt, 24, Cesium);
+    routePreviewZoomFovData.value = buildRouteViewshedData(position, gimbalAtt, zoomFocalLength, Cesium);
   }
   previewLastFovUpdateAt = updateTime;
   emit('preview-camera-update', {
