@@ -10,6 +10,9 @@
 
 <script setup>
 import { markRaw, onBeforeUnmount, ref, watch } from 'vue';
+import { calculateFovFromFocalLength } from '../../../utils/fovCalculator.js';
+
+const ARCGIS_WORLD_IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer';
 
 const props = defineProps({
     dronePos: { type: Object, required: true }, // {lng, lat, alt} - 绝对海拔 (ASL)
@@ -43,9 +46,11 @@ const onViewerReady = ({ Cesium, viewer }) => {
     // 极简图层配置
     viewer.imageryLayers.removeAll();
     viewer.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
-        url: 'https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+        // 飞行轨迹和主地图均为 WGS84。相机预览必须使用同一坐标系的
+        // 影像，不能将 WGS84 相机位置直接叠加到 GCJ-02 高德瓦片上。
+        url: `${ARCGIS_WORLD_IMAGERY_URL}/tile/{z}/{y}/{x}`,
         minimumLevel: 1,
-        maximumLevel: 18
+        maximumLevel: 19
     }));
 
     // 地形加载
@@ -125,8 +130,13 @@ const updateCamera = () => {
         }
     });
 
-    const hfov = 84 / props.zoomFactor;
-    viewer.camera.frustum.fov = Cesium.Math.toRadians(hfov);
+    // 与主地图 viewshed 共用同一套 35 mm 等效焦距和 4:3 传感器模型，
+    // 保证预览窗口边缘对应黄色/绿色视场边缘。
+    const fov = calculateFovFromFocalLength(24 * Math.max(1, Number(props.zoomFactor) || 1));
+    const hfov = Cesium.Math.toRadians(fov.hfov);
+    const vfov = Cesium.Math.toRadians(fov.vfov);
+    viewer.camera.frustum.aspectRatio = Math.tan(hfov / 2) / Math.tan(vfov / 2);
+    viewer.camera.frustum.fov = Math.max(hfov, vfov);
     updateCenterDistance();
     viewer.scene.requestRender();
 };
