@@ -1,5 +1,5 @@
 <template>
-  <div ref="mapRootRef" tabindex="0" class="relative w-full h-full outline-none" @pointerdown="focusManualFlightInput">
+  <div ref="mapRootRef" data-map-fullscreen-root tabindex="0" class="relative w-full h-full outline-none" @pointerdown="focusManualFlightInput">
     <vc-viewer @ready="onViewerReadyInternal" :scene-mode="sceneMode" @left-click="onMapClick"
       :access-token="cesiumAccessToken" :remove-cesium-script="false" :animation="false" :timeline="false" :base-layer-picker="false"
       :fullscreen-button="false" :scene-mode-picker="false" :info-box="false" :selection-indicator="false"
@@ -713,6 +713,9 @@
         </div>
       </template>
     </div>
+
+    <!-- Overlays that must remain visible when mapRootRef enters element fullscreen. -->
+    <slot name="fullscreen-overlay" />
   </div>
 </template>
 

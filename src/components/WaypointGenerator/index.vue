@@ -19,7 +19,17 @@
         @waypoint-move="onWaypointMove"
         @preview-camera-update="handleRoutePreviewCameraUpdate"
         @preview-fov-visibility-update="handleRoutePreviewFovVisibilityUpdate"
-        class="h-full w-full" />
+        class="h-full w-full">
+        <template #fullscreen-overlay>
+          <MissionCameraPreview
+            v-if="currentView === 'library' && routePreviewFovVisible && previewMission?.waypoints?.length"
+            :mission="previewMission"
+            :live-state="routePreviewCameraState"
+            @fov-update="handleFovUpdateFromEditor"
+            @focus-waypoint="handleLibraryPreviewWaypoint"
+          />
+        </template>
+      </MapViewer>
     </div>
 
     <div class="relative z-[10] w-full h-full pointer-events-none">
@@ -59,10 +69,6 @@
       :get-map-center="getMapCenter"
       :drone-context="aiDroneContext" @apply="handleApplyAIPlan"
       @request-map-selection="startAIMapSelection" />
-
-    <MissionCameraPreview v-if="currentView === 'library' && routePreviewFovVisible && previewMission?.waypoints?.length"
-      :mission="previewMission" :live-state="routePreviewCameraState" @fov-update="handleFovUpdateFromEditor"
-      @focus-waypoint="handleLibraryPreviewWaypoint" />
 
     <div v-if="aiMapSelectionMode" class="ai-map-pick-banner pointer-events-auto">
       <div>
